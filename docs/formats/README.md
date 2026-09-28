@@ -430,7 +430,7 @@ exactly. Offsets are from the record start:
 | 0x90 | f32×4 | the eye: where a camera without rails views from; equals the last point of the eye rail |
 | 0xA0 | f32×4 | equals the last point of the track rail |
 | 0xC0 | f32×4 | unknown point |
-| 0xD0 | u8[128] | mostly `0x01`, some `0xFF`: per-object flags? (hiding objects that block the view is a guess) |
+| 0xD0 | u8[128] | 750 of 1,575 cameras have all `0x01` and about 146 all `0x00`; the rest mix in `0xFF` and values like 10–200 in steps of 10 (100, 60, 50 are the most common). **Not occluder flags**: taking byte *k* as room object *k*, objects marked `0xFF` cross the line from the eye to the zone centre as often as those marked `0x01` (2.4% against 2.1%). Percent-like parameters per slot (lights? object groups?), unknown |
 | 0x150 | u8[8] | type bytes, e.g. `00 00 00 01 02 02 6e 00`. Bytes 4 and 5 are the point counts of the eye and track rails (all 1,181 rail records; 310 records without rails carry counts too). The rest are unknown |
 | 0x158 | u32 flags | `0x10`: the record ends with rails |
 | 0x15C | u32 n | rail point count (both rails together) |
@@ -486,7 +486,7 @@ player.
 Still to confirm against the running game:
 - how the original blends between cameras;
 - what the eye rail's fourth component, the +0xC0 point, the other type
-  bytes and the object flags mean;
+  bytes and the 128 bytes at +0xD0 mean;
 - whether the FOV is vertical or horizontal.
 
 ## 4f. Room props (`.fsd` section 19): table `PC-verified`, placement unknown

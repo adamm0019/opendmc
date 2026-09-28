@@ -14,7 +14,7 @@ pub const VERSION_TAG: &[u8; 4] = b"ver\x02";
 
 const HEADER: usize = 16;
 const RECORD: usize = 0x220;
-const OBJECT_FLAGS: usize = 128;
+const SLOT_PARAMS: usize = 128;
 /// `flags` bit: the record ends with the two rails.
 pub const HAS_RAILS: u32 = 0x10;
 const MAX_RAIL_POINTS: usize = 4096;
@@ -36,9 +36,10 @@ pub struct Camera {
     pub track_end: [f32; 3],
     /// An unexplained point (+0xC0).
     pub extra_point: [f32; 3],
-    /// One byte per room object, mostly `0x01`, some `0xFF` (hidden while
-    /// this camera is active? unconfirmed).
-    pub object_flags: Vec<u8>,
+    /// 128 bytes at +0xD0: all `0x01` in half the cameras, else `0x00`,
+    /// `0xFF` and percent-like values (10–200). Not per-object occluder
+    /// flags (§4e); meaning unknown.
+    pub slot_params: Vec<u8>,
     /// Eight type bytes at +0x150. Bytes 4 and 5 are the point counts of
     /// the eye and track rails (also set on some records without rails);
     /// the rest are unknown.
@@ -151,7 +152,7 @@ fn parse_record(r: &Reader, o: usize) -> Result<Camera> {
         eye: vec3(0x90)?,
         track_end: vec3(0xA0)?,
         extra_point: vec3(0xC0)?,
-        object_flags: r.bytes(o + 0xD0, OBJECT_FLAGS)?.to_vec(),
+        slot_params: r.bytes(o + 0xD0, SLOT_PARAMS)?.to_vec(),
         kind: r.bytes(o + 0x150, 8)?.try_into().unwrap(),
         flags,
         fov: r.f32(o + 0x180)?,
@@ -203,7 +204,7 @@ pub fn build(cameras: &[NewCamera]) -> Vec<u8> {
         point(&mut w, track_end, 1.0);
         w.zeros(16);
         point(&mut w, [0.0; 3], 1.0);
-        w.bytes(&[1; OBJECT_FLAGS]);
+        w.bytes(&[1; SLOT_PARAMS]);
         w.zeros(8);
         let flags = if c.rails.is_empty() { 0 } else { HAS_RAILS };
         w.u32(flags).u32(2 * c.rails.len() as u32);
@@ -283,7 +284,7 @@ mod tests {
         assert_eq!(rail.eye, [300., 2000., -600.]);
         assert_eq!(rail.track_end, [400., 700., 300.]);
         assert_eq!(rail.rail_lengths, [700.0, 700.0]);
-        assert_eq!(rail.object_flags.len(), 128);
+        assert_eq!(rail.slot_params.len(), 128);
     }
 
     #[test]
