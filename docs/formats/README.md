@@ -399,6 +399,39 @@ Flag bits, compared against the normal (floor `ny > 0.7`, ceiling
 Renders of `r100` (the castle hall) show the walls, pillars, stairs, the
 statue's plinth and the chandeliers' hulls in place over the room geometry.
 
+## 4e. Cameras (`.fsd` section 2): `speculative`, record walk `PC-verified`
+
+Present in 98 rooms (560–46,480 bytes). Header (16 bytes): `u32 count`, 4
+bytes of leftover memory, the tag `ver`, 4 more leftover bytes. Only
+`r503` lacks the tag (an older, smaller record layout, not handled yet).
+
+Records follow the header back to back. Size = `0x220 + (flags & 0x10 ?
+16·n : 0)`, with `flags` at +0x158 and `n` at +0x15C. This walks every one
+of the 97 version-2 rooms exactly (1,576 records). Offsets are from the
+record start:
+
+| Off | Field | Reading |
+|---|---|---|
+| 0x00 | f32×4 A (w = 1) | zone corner |
+| 0x10 | f32×4 B (w = 1) | opposite zone corner |
+| 0x20 | 6 × f32×4 (w = 0) | unit face normals: planes 0–2 through B, 3–5 through A. Together a convex hexahedron (checked on `r100` record 0): probably the **activation zone** |
+| 0x80 | f32×4 | look-at offset, usually `(0, 900, 0)`: Dante's head height (Dante ≈ 900 units tall) |
+| 0x90 | f32×4 P1 | equals the last point of the look-at path |
+| 0xA0 | f32×4 P2 | equals the last point of the eye path |
+| 0xC0 | f32×4 P3 | unknown point |
+| 0xD0 | u8[128] | mostly `0x01`, some `0xFF`: per-object flags? (cut-away hiding is a guess) |
+| 0x150 | u8[8] | type bytes, e.g. `00 00 00 01 02 02 6e 00` |
+| 0x158 | u32 flags | `0x10` = has the path tail |
+| 0x15C | u32 n | tail point count |
+| 0x168 | f32, f32 | arc lengths of the two tail paths (match the points exactly) |
+| 0x180 | f32 | 55.0 in most records (also 54.6, 49.7, 42.6, 39.9, 25.1): the **FOV in degrees**, probably |
+| 0x190 | i32×4 | usually −1 (links?) |
+| 0x220 | n × f32×4 | two paths of n/2 points: look-at path (w small), then eye path (w = 1). Rail cameras, probably |
+
+Still to confirm: how the player's position picks a point on the paths,
+the non-rail camera types, and whether FOV is vertical or horizontal.
+Renders of `r100` from P2 towards P1 are the next check.
+
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 
 At `base + skeletonOffset`:
