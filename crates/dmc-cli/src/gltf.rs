@@ -79,6 +79,22 @@ impl Glb {
         self.accessor(view, FLOAT, data.len(), ty, bounds)
     }
 
+    /// Float data that is not a vertex attribute (animation samplers): no
+    /// buffer-view target.
+    pub fn samples<const N: usize>(
+        &mut self,
+        data: &[[f32; N]],
+        ty: &str,
+        with_bounds: bool,
+    ) -> usize {
+        let a = self.floats(data, ty, with_bounds);
+        let view = self.accessors[a]["bufferView"].as_u64().unwrap_or(0) as usize;
+        if let Some(v) = self.views[view].as_object_mut() {
+            v.remove("target");
+        }
+        a
+    }
+
     pub fn joints(&mut self, data: &[[u8; 4]]) -> usize {
         let bytes: Vec<u8> = data.iter().flatten().copied().collect();
         let view = self.view(&bytes, Some(ARRAY_BUFFER));

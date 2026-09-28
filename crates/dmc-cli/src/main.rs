@@ -56,7 +56,13 @@ enum Cmd {
     /// Decode every embedded texture container to PNG.
     Tex { file: PathBuf, out: PathBuf },
     /// Convert a model file to glTF binary (.glb), textured and skinned.
-    Model { file: PathBuf, out: PathBuf },
+    Model {
+        file: PathBuf,
+        out: PathBuf,
+        /// Also export every motion in the model's banks as an animation.
+        #[arg(long)]
+        anims: bool,
+    },
     /// Batch-convert every model under a directory or inside an `.nbz`
     /// archive, with validation stats.
     Export {
@@ -65,6 +71,9 @@ enum Cmd {
         out: PathBuf,
         #[arg(long)]
         pattern: Option<String>,
+        /// Also export every motion as an animation.
+        #[arg(long)]
+        anims: bool,
     },
 }
 
@@ -87,12 +96,17 @@ fn main() -> Result<()> {
             println!("{n} images -> {}", out.display());
             Ok(())
         }
-        Cmd::Model { file, out } => {
-            let stats = export::model_to_glb(&archive::read_spec(&file)?, &out)?;
+        Cmd::Model { file, out, anims } => {
+            let stats = export::model_to_glb(&archive::read_spec(&file)?, &out, anims)?;
             println!("{}  {stats}", out.display());
             Ok(())
         }
-        Cmd::Export { dir, out, pattern } => export::batch(&dir, &out, pattern.as_deref()),
+        Cmd::Export {
+            dir,
+            out,
+            pattern,
+            anims,
+        } => export::batch(&dir, &out, pattern.as_deref(), anims),
     }
 }
 

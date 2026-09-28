@@ -4,8 +4,10 @@
 use crate::archive::Source;
 use crate::gltf::Glb;
 use anyhow::{Context, Result, bail};
-use dmc_formats::geometry::Geometry;
+use dmc_formats::geometry::{Geometry, Skeleton};
 use dmc_formats::model::ModelFile;
+use dmc_formats::motion::{FPS, MotionBank};
+use dmc_formats::pose;
 use dmc_formats::texture::{self, TextureSet};
 use serde_json::{Value, json};
 use std::fmt;
@@ -49,6 +51,7 @@ pub struct Stats {
     pub triangles: usize,
     pub bones: usize,
     pub textures: usize,
+    pub motions: usize,
     pub mean_normal_length: f32,
 }
 
@@ -64,12 +67,13 @@ impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "meshes={:3} verts={:6} tris={:6} bones={:3} tex={:2} nrmlen={:.4}{}",
+            "meshes={:3} verts={:6} tris={:6} bones={:3} tex={:2} anims={:3} nrmlen={:.4}{}",
             self.meshes,
             self.vertices,
             self.triangles,
             self.bones,
             self.textures,
+            self.motions,
             self.mean_normal_length,
             if self.looks_valid() {
                 ""
@@ -96,8 +100,8 @@ fn pick_textures(data: &[u8], geo: &Geometry) -> Option<(usize, TextureSet)> {
         .find(|(_, s)| s.images.len() >= need)
 }
 
-pub fn model_to_glb(data: &[u8], out: &Path) -> Result<Stats> {
-    let (_, geo) = ModelFile::detect(data).context("not a recognised model file")?;
+pub fn model_to_glb(data: &[u8], out: &Path, animations: bool) -> Result<Stats> {
+    let (model, geo) = ModelFile::detect(data).context("not a recognised model file")?;
     let mut glb = Glb::default();
     let mut stats = Stats::default();
     let mut doc = json!({ "scene": 0, "scenes": [{ "nodes": [] }], "nodes": [], "meshes": [] });
@@ -163,6 +167,13 @@ pub fn model_to_glb(data: &[u8], out: &Path) -> Result<Stats> {
         let acc = glb.floats(&ibm, "MAT4", false);
         doc["skins"] = json!([{ "joints": (0..bone_count).collect::<Vec<_>>(), "inverseBindMatrices": acc, "skeleton": roots.first() }]);
         stats.bones = bone_count;
+        if animations {
+            let anims = motion_animations(data, &model, s, &mut glb);
+            stats.motions = anims.len();
+            if !anims.is_empty() {
+                doc["animations"] = Value::Array(anims);
+            }
+        }
     }
 
     // One glTF mesh per object, one primitive per DMC mesh.
@@ -230,7 +241,75 @@ pub fn model_to_glb(data: &[u8], out: &Path) -> Result<Stats> {
     Ok(stats)
 }
 
-pub fn batch(source: &Path, out: &Path, pattern: Option<&str>) -> Result<()> {
+/// Every motion in every motion bank of the model, as glTF animations on the
+/// joint nodes (0..bones), sampled once per 60 fps frame through
+/// [`pose::sample`] so the export shows exactly what the engine plays.
+fn motion_animations(
+    data: &[u8],
+    model: &ModelFile,
+    skeleton: &Skeleton,
+    glb: &mut Glb,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    for sec in &model.sections {
+        if sec.index == model.layout.geometry_section() || Some(sec.index) == coat_bank(model) {
+            continue;
+        }
+        let Some(bytes) = model.section(data, sec.index) else {
+            continue;
+        };
+        let Ok(bank) = MotionBank::parse(bytes, model.endian) else {
+            continue;
+        };
+        for (mi, motion) in bank.motions.iter().enumerate() {
+            let Some(motion) = motion else { continue };
+            let frames = motion.frames.max(1) as usize;
+            let poses: Vec<_> = (0..frames)
+                .map(|f| pose::sample(skeleton, motion, f as f32))
+                .collect();
+            let times: Vec<[f32; 1]> = (0..frames).map(|f| [f as f32 / FPS]).collect();
+            let input = glb.samples(&times, "SCALAR", true);
+            let (mut samplers, mut channels) = (Vec::new(), Vec::new());
+            for joint in 0..skeleton.bone_count() {
+                let local = |f: fn(&pose::Local) -> Vec<f32>| -> Vec<Vec<f32>> {
+                    poses.iter().map(|p| f(&p.locals[joint])).collect()
+                };
+                let t = local(|l| l.translation.to_array().to_vec());
+                let r = local(|l| l.rotation.to_array().to_vec());
+                let s = local(|l| l.scale.to_array().to_vec());
+                let mut add = |path: &str, output: usize| {
+                    channels.push(json!({ "sampler": samplers.len(), "target": { "node": joint, "path": path } }));
+                    samplers.push(
+                        json!({ "input": input, "output": output, "interpolation": "LINEAR" }),
+                    );
+                };
+                add("translation", glb.samples(&arrays::<3>(&t), "VEC3", false));
+                add("rotation", glb.samples(&arrays::<4>(&r), "VEC4", false));
+                if s.iter().any(|v| v.iter().any(|&x| x != 1.0)) {
+                    add("scale", glb.samples(&arrays::<3>(&s), "VEC3", false));
+                }
+            }
+            out.push(json!({
+                "name": format!("s{}_m{mi:03}", sec.index),
+                "samplers": samplers,
+                "channels": channels,
+            }));
+        }
+    }
+    out
+}
+
+/// Player bodies (11 sections on PC) keep the coat's motions in section 7;
+/// they drive the separate coat skeleton in section 1, not the body.
+fn coat_bank(model: &ModelFile) -> Option<usize> {
+    (model.layout == dmc_formats::model::Layout::Counted && model.sections.len() == 11).then_some(7)
+}
+
+fn arrays<const N: usize>(v: &[Vec<f32>]) -> Vec<[f32; N]> {
+    v.iter().map(|x| std::array::from_fn(|i| x[i])).collect()
+}
+
+pub fn batch(source: &Path, out: &Path, pattern: Option<&str>, animations: bool) -> Result<()> {
     let mut src = Source::open(source)?;
     let (mut ok, mut suspicious, mut failed) = (0, 0, Vec::new());
     for entry in src.entries()? {
@@ -250,7 +329,10 @@ pub fn batch(source: &Path, out: &Path, pattern: Option<&str>) -> Result<()> {
             continue;
         }
         let dest = out.join(&entry.name).with_extension("glb");
-        match src.read(&entry.name).and_then(|d| model_to_glb(&d, &dest)) {
+        match src
+            .read(&entry.name)
+            .and_then(|d| model_to_glb(&d, &dest, animations))
+        {
             Ok(s) => {
                 println!("OK   {:<40} {s}", entry.name);
                 ok += 1;
@@ -275,6 +357,7 @@ mod tests {
     use dmc_formats::Endian;
     use dmc_formats::bytes::Writer;
     use dmc_formats::geometry::{self, NewMesh, NewSkeleton, STRIP_BREAK};
+    use dmc_formats::motion;
 
     /// A synthetic model file: section list, geometry, then a texture set.
     fn synthetic_model() -> Vec<u8> {
@@ -304,11 +387,44 @@ mod tests {
                 pixels: &px,
             }],
         );
+        let key = |frame, value| motion::Key {
+            frame,
+            value,
+            in_tangent: 0.0,
+            out_tangent: 0.0,
+        };
+        let swing = motion::Channel {
+            tracks: [
+                motion::Track {
+                    keys: vec![key(0, 0.0), key(9, 1.0)],
+                },
+                motion::Track::default(),
+                motion::Track::default(),
+            ],
+        };
+        let bank = motion::build(
+            e,
+            &[motion::NewMotion {
+                frames: 10,
+                channel_ids: vec![1],
+                channels: vec![
+                    motion::Channel::default(),
+                    motion::Channel::default(),
+                    swing,
+                ],
+                frame_words: Vec::new(),
+            }],
+        );
         let mut w = Writer::new(e);
         let s0 = 16;
         let s1 = s0 + geo.len().next_multiple_of(16);
-        w.u32(s0 as u32).u32(s1 as u32).u32(0).u32(0);
-        w.bytes(&geo).pad_to(16, 0).bytes(&tex);
+        let s2 = s1 + tex.len().next_multiple_of(16);
+        w.u32(s0 as u32).u32(s1 as u32).u32(s2 as u32).u32(0);
+        w.bytes(&geo)
+            .pad_to(16, 0)
+            .bytes(&tex)
+            .pad_to(16, 0)
+            .bytes(&bank);
         w.finish()
     }
 
@@ -316,7 +432,7 @@ mod tests {
     fn exports_a_valid_glb() {
         let dir = std::env::temp_dir().join(format!("dmc-cli-test-{}", std::process::id()));
         let out = dir.join("m.glb");
-        let stats = model_to_glb(&synthetic_model(), &out).unwrap();
+        let stats = model_to_glb(&synthetic_model(), &out, true).unwrap();
         assert_eq!(
             (
                 stats.meshes,
@@ -328,8 +444,16 @@ mod tests {
             (1, 4, 2, 2, 1)
         );
         assert!(stats.looks_valid());
+        assert_eq!(stats.motions, 1);
 
         let bytes = fs::read(&out).unwrap();
+        let parsed = ::gltf::Gltf::from_slice(&bytes).expect("an independent reader accepts it");
+        let anim = parsed.animations().next().expect("one animation");
+        assert_eq!(
+            anim.channels().count(),
+            4,
+            "translation + rotation per joint"
+        );
         assert_eq!(&bytes[..4], b"glTF");
         assert_eq!(
             u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize,
