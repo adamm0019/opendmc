@@ -444,19 +444,21 @@ fn markdown(inv: &Inventory) -> String {
     }
 
     md.push_str(
-        "\n## Unknown files (first 60)\n\n| path | size | entropy | head |\n|---|---:|---:|---|\n",
+        "\n## Unknown files\n\nUp to three examples per container and extension.\n\n\
+         | path | size | entropy | head |\n|---|---:|---:|---|\n",
     );
     let unknown_loose = inv
         .files
         .iter()
         .filter(|f| f.kind == Kind::Unknown)
-        .map(|f| (f.path.clone(), f.size, f.entropy, f.head.clone()));
+        .map(|f| ("", f.path.clone(), f.size, f.entropy, f.head.clone()));
     let unknown_entries = inv.containers().flat_map(|(f, c)| {
         c.entries
             .iter()
             .filter(|e| e.kind == Kind::Unknown)
             .map(move |e| {
                 (
+                    f.path.as_str(),
                     format!("{}::{}", f.path, e.path),
                     e.size,
                     e.entropy,
@@ -464,8 +466,13 @@ fn markdown(inv: &Inventory) -> String {
                 )
             })
     });
-    for (path, size, entropy, head) in unknown_loose.chain(unknown_entries).take(60) {
-        let _ = writeln!(md, "| `{path}` | {size} | {entropy:.2} | `{head}` |");
+    let mut shown: BTreeMap<(&str, String), usize> = BTreeMap::new();
+    for (container, path, size, entropy, head) in unknown_loose.chain(unknown_entries) {
+        let n = shown.entry((container, ext_of(&path))).or_default();
+        *n += 1;
+        if *n <= 3 {
+            let _ = writeln!(md, "| `{path}` | {size} | {entropy:.2} | `{head}` |");
+        }
     }
     md
 }

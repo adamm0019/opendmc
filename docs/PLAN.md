@@ -119,6 +119,22 @@ The first real contact with the PC files.
 **Exit:** every byte of DMC1 data belongs to a known container, and every
 container type has a coverage status.
 
+**Status: in progress.** Report:
+[`docs/inventory/pc-58ed9634.md`](inventory/pc-58ed9634.md).
+- Container: `data/dmc1/dmc1-0.nbz` is a plain ZIP. FMOD Studio banks and WMV
+  videos sit loose beside it. No `.BDP`.
+- Byte order: little-endian throughout. The texture magic bytes are the same
+  as on PS3, so they can't signal byte order.
+- Layouts: the same records as the PS3 notes, widened for 64-bit (u64
+  offsets, `0xCC` padding). Textures are embedded DDS files. Rooms (`.fsd`)
+  use their own geometry records. All 73 models and all 106 rooms export
+  to glTF (`dmc export`, `dmc room`).
+- Collision: `.fsd` section 9, parsed for all 106 rooms (`dmc room` writes
+  it beside each room). Cameras: `.fsd` section 2, parsed for 97 rooms:
+  activation zones, rails and FOV; behaviour still to confirm in-game.
+  Triggers: not located yet. Cutscene/event data: `.fsd` section 30. Audio: FMOD banks.
+  Video: WMV.
+
 ### Phase 2: Asset pipeline *(3–6 weeks)*
 | Asset | Source | Output | Validation |
 |---|---|---|---|
@@ -127,9 +143,9 @@ container type has a coverage status.
 | Skeletons | geometry section | glTF skin | bone count matches motions; bind pose sane |
 | Motions | motion banks (sections 6/7 players, 3/5 enemies) | glTF animations | 60 fps; root motion distance matches in-game capture |
 | Leg IK | motion channels (target + hinge) | runtime 2-bone IK | feet planted on flat ground in idle/walk |
-| Rooms | `.fsd` + to be discovered | Bevy scene | overlays match screenshots at known camera angles |
-| Collision | **unknown** | trimesh / heightfield | fallback: derive from render mesh + manual volumes |
-| Cameras | **unknown** | camera zones + rails | fallback: camera authoring tool fitted to screenshots |
+| Rooms | `.fsd` section 14 + textures in 34 | glTF / Bevy scene | 106/106 convert; object bounds cross-check; overlays match screenshots at known camera angles |
+| Collision | `.fsd` section 9 (box tree of quads/triangles) | trimesh + surface flags | 106/106 rooms parse; counts and spans self-check; renders match geometry |
+| Cameras | `.fsd` section 2 (zones, rails, FOV) | camera zones + rails | parsed for 97 rooms; confirm behaviour against captures; `camfit` stays the fallback |
 | Audio | **unknown** | decoded PCM streams | play in sync with animation events |
 | Video | **unknown** (FMV) | external decoder or skip | — |
 
@@ -164,6 +180,16 @@ to authored cameras matches screenshots within ~1° and ~5% FOV.
 - **Measure, then author.** Record the original at 60 fps with an on-screen
   input display, count frames, and write the values into
   `data/moves/dante.ron` with a `source:` note for each.
+
+**Status: started.** `dmc_sim::world::World` holds a room's collision
+triangles in sim units (room units ÷ 450, so Dante is 2 tall) in an X/Z grid.
+It answers ground queries (steps, slopes, snapping down stairs) and pushes
+bodies out of walls. `Sim::with_world` swaps it in for the graybox floor.
+Body sizes are placeholders until measured. Tests: synthetic walls, steps,
+ledges, fast falls and replay determinism. With `OPENDMC_GAME_DIR` set, the
+player also runs on every real room: 331 runs, and 7 leave the static mesh
+through openings the game closes some other way (doorway props, a stairwell
+gap in `r200`/`r211`).
 
 ### Phase 6: Combat core *(6–10 weeks)*
 The part that decides whether the project succeeds.

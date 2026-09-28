@@ -1,22 +1,58 @@
 # DMC1 data formats
 
-Our own notes, rewritten from community research and checked against our code.
+Our own notes, rewritten from community research and from reading the files
+of our own copies, and checked against our code.
 **Status labels** on each section:
 
 - `PS3-community`: described by community research on the PS3 build and not yet
   seen on PC.
-- `PC-verified`: confirmed on a PC install with `dmc inventory` / `dmc export`.
+- `PC-verified`: confirmed on a PC install with `dmc inventory` / `dmc export`
+  or a parser test over every file of that type.
 - `speculative`: our hypothesis.
 
 Unless noted otherwise, offsets are in bytes, and multi-byte fields use the
-file's byte order (`E`). Primary source for the PS3 facts: the comments in
-luismateusvargas/dmc-model-extractor (see `DECISIONS.md`: facts only, no code).
+file's byte order (`E`). The PC build is little-endian throughout. Primary
+source for the PS3 facts: the comments in luismateusvargas/dmc-model-extractor
+(see `DECISIONS.md`: facts only, no code). The PC facts are our own reading of
+the data files; nothing here comes from the executable.
+
+The PC inventory these notes were checked against is
+[`docs/inventory/pc-58ed9634.md`](../inventory/pc-58ed9634.md).
 
 ---
 
+## 0. PC install layout: `PC-verified`
+
+The Steam *HD Collection* keeps DMC1 under `data/dmc1/`:
+
+| Path | What | Format |
+|---|---|---|
+| `dmc1-0.nbz` | all game data (1.6 GB, 1,212 entries: 1,190 files + 22 directories) | plain ZIP, renamed (§0.1) |
+| `audio/*.bank` | music, SFX and voice (4 banks, 117 MiB) | FMOD Studio banks (§10) |
+| `Video/*.wmv` | FMV (31 files, 3 GiB) | ASF / Windows Media Video (§11) |
+
+### 0.1 `.nbz` archives
+
+An `.nbz` file is an ordinary ZIP file: a `PK\x03\x04` local header, a
+central directory, and every file entry stored with Deflate (method 8). There
+is no extra encryption or custom header. Directory entries are present (method
+0, size 0). Entry names use `/` and mixed case (`Emd/`, `Etc/`, `etc_c/`,
+`Fsd/`, `Pld/`, `status/`, `status_<lang>/`, `text/`, which is empty).
+
+The `_<letter>` suffixes are per-language copies of the same file set (`c`,
+`e`, `f`, `g`, `i`, `s`, `u`, `z`, plus the unsuffixed default). `e`, `f`,
+`g`, `i`, `s` read naturally as English, French, German, Italian and Spanish;
+`c`, `u`, `z` and the default are not confirmed. *(speculative)*
+
+The ZIP directory records a CRC-32 and a date for every entry. `dmc inventory`
+hashes names, sizes and CRCs into a **data-build fingerprint**, so two installs
+can be compared without sharing any data. The newest entry date in the
+Steam build is 2018-03-01.
+
 ## 1. Pipeworks bundle (`.BDP`): `PS3-community`
 
-The HD port's archive. On PS3, DMC1's data sits in `BUNDLES/DMC1.BDP`.
+The HD port's archive on PS3, where DMC1's data sits in `BUNDLES/DMC1.BDP`.
+**Not used on PC** (§0.1).
 
 | Off | Type | Field |
 |---|---|---|
@@ -43,50 +79,91 @@ presumably compressed (the codec isn't known yet, and the extractor reports it).
 blob. An entry's path is `dir/name.ext`, joined through the shared `hash`.
 Several entries can share one hash (chunked payloads).
 
-**PC check:** the banner text itself says the byte order, so detection needs no
-guessing.
+## 2. Texture container (`T32` / `TM2`)
 
-## 2. Texture container (`T32` / `TM2`): `PS3-community`
+Embedded inside model and room files, and also loose (`.t32`, `.tm2`) and
+inside packs (§9). A model's `texIndex` counts from 0 within one container.
 
-Embedded inside model files. A model's `texIndex` counts from 0 within one
-container.
-
-The magic is `"T32\0"` or `"TM2\0"` *stored word-reversed*. On a big-endian
-disc the first four bytes are `00 32 33 54` (`T32`) or `00 32 4D 54` (`TM2`).
-The same bytes read as a little-endian u32 give `0x54333200`. We try both.
+The first four bytes are the fixed sequence `00 32 33 54` (`T32`) or
+`00 32 4D 54` (`TM2`) on **both** PS3 and PC. They are the ASCII tag
+reversed, which looks like a byte-order hint but is not one: the PC files put
+these same bytes in front of little-endian fields. Byte order therefore comes
+from the header fields, never from the magic. (Our reader also accepts the
+ASCII form `T32\0` in case another build uses it.)
 
 | Off | Type | Field |
 |---|---|---|
-| 0x00 | u32 | magic |
+| 0x00 | u8[4] | magic |
 | 0x04 | u32 | image count `n` |
-| 0x08 | u32 | header size (= `0x10 + 0xA0·n`) |
+| 0x08 | u32 | header size |
 | 0x0C | u32 | data size |
-| 0x10 | `n × 0xA0` | image headers |
+| 0x10 | … | image headers |
 
-**Image header** (0xA0 bytes, relative to its start): `+0x00 u32 index`,
-`+0x24 u32 dataSize`, `+0x38 u8 format`, `+0x40 u16 width`, `+0x42 u16 height`.
-Pixel data for all images follows the headers back to back, in header order.
+### 2.1 PS3 layout: `PS3-community`
+
+The header size is exactly `0x10 + 0xA0·n`. **Image header** (0xA0 bytes,
+relative to its start): `+0x00 u32 index`, `+0x24 u32 dataSize`,
+`+0x38 u8 format`, `+0x40 u16 width`, `+0x42 u16 height`. Raw pixel data for
+all images follows the headers back to back, in header order.
 
 `format & 0x0F`: `5` = ARGB8888, `6` = DXT1 (BC1), `8` = DXT5 (BC3).
 `format & 0x20` means no mipmaps. The HD port re-encoded the art at 2× PS2
 resolution. UVs are normalised, so that makes no difference to meshes.
 
-## 3. Model file sections: `PS3-community`
+### 2.2 PC layout: `PC-verified` (all 321 loose `.t32`/`.tm2` files parse)
 
-`.pld` (player), `.pws`/`.pwd` (weapon), `.emd` (enemy) and `.fsd` (room props)
-start with a flat list of `u32` section offsets:
+- Header fields are little-endian.
+- Image header slots are **0xA8** bytes, and the header block is padded to a
+  multiple of 16. The header size lies in `[0x10 + 0xA8, align16(0x10 + 0xA8·n)]`.
+- Some containers have fewer slots than images (`mssn_f00.tm2`: `n = 2`, one
+  slot), so the count, not the slots, says how many images follow.
+- Each image is a **complete DDS file** (`"DDS "` magic, 124-byte header, all
+  mip levels), per Microsoft's public DDS documentation. Images follow the
+  header back to back; when a DDS file's size leaves the next one unaligned,
+  the next one starts at the next multiple of 16.
+- The per-slot size field (`+0x2C`) does not always match the DDS size
+  (`em10`), so a reader walks the DDS files by their own computed size.
+- Pixel formats seen: DXT1, DXT3, DXT5, and 32-bit BGRA
+  (`masks R=0x00FF0000, G=0x0000FF00, B=0x000000FF, A=0xFF000000`).
+  Rooms use DXT3 heavily; PS3 notes don't mention it.
+
+## 3. Model file sections
+
+`.pld` (player), `.pws`/`.pwd` (weapon), `.emd` (enemy) and `.fsd` (room)
+start with a table of section offsets. An offset of `0` means an empty
+section.
+
+### 3.1 PS3: `PS3-community`
+
+A flat list of `u32` offsets, running until the first section starts:
 
 - Player bodies `pl00`, `pl05`: the list starts at 0.
 - Devil Trigger bodies (`pl01`, `pl03`, `pl06`) and all enemies: a 0x800-byte
   texture directory comes first, the list starts at 0x800, and offsets are
-  relative to 0x800. An offset of `0` means an empty section.
+  relative to 0x800.
 
-Section 0 holds the geometry, including the skeleton. The motion banks are
-sections 6 (body) and 7 (coat) for players, and sections 3 and 5 for enemies.
+### 3.2 PC: `PC-verified` (all 73 `.pld/.pws/.pwd/.emd` and all 106 `.fsd`)
 
-## 4. Geometry section: `PS3-community`
+| Files | Table |
+|---|---|
+| `.pld/.pws/.pwd/.emd` | `u32 count`, then `count × u32 offset` (Layout `Counted`) |
+| `.fsd` | `u32 count` (always 35), 4 bytes `0xCC`, then `count × u64 offset` (Layout `Counted64`) |
+
+There is no texture directory; offsets count from the start of the file.
+Section offsets are not always in ascending order (`r002.fsd` sections 25
+and 26), so a section ends at the next-highest offset, not at the next entry.
+
+Section 0 holds the geometry of characters, weapons and enemies. Rooms keep
+theirs in section 14 (§4b). The PS3 notes put the motion banks in sections 6
+(body) and 7 (coat) for players and 3 and 5 for enemies, and the PC files
+agree: `pl00` has 11 sections (0 geometry, 6 body motions, 7 coat motions,
+8 the T32 textures), and `em00` keeps motions in 3 and 5 (§6.1).
+
+## 4. Geometry section (characters, weapons, enemies)
 
 Offsets are relative to the section start (`base`).
+
+### 4.1 PS3: `PS3-community`
 
 ```
 u8  objectCount
@@ -118,7 +195,258 @@ plus `totalVerts` is a strong validity check. Primitives are **triangle strips**
 and a vertex whose weight word has bit 15 set starts a new strip. `0xCDCDCDCD`
 is filler between blocks. Vertices are in model space, already in bind pose.
 
-## 5. Skeleton: `PS3-community`
+### 4.2 PC (`Pc64`): `PC-verified` (73/73 models)
+
+The same records, widened for a 64-bit build. Every offset becomes a `u64`,
+and the 4 bytes between the small fields and the first offset are `0xCC`
+padding.
+
+```
+header (16 bytes):
+    u8 objectCount, u8 boneCount, u8 texCount, u8 _
+    4 × 0xCC
+    u64 skeletonOffset
+object[objectCount]   stride 24:
+    u8 meshCount, u8 0, u16 totalVerts
+    4 × 0xCC
+    u64 meshDescOffset
+    8 bytes unknown
+mesh descriptor       stride 56:
+    u16 numVerts, u16 texIndex
+    4 × 0xCC
+    u64 posOffset, nrmOffset, uvOffset, boneOffset, weightOffset
+    8 bytes unknown
+```
+
+Two differences beyond widening:
+
+- Attribute arrays are packed **mesh-major**: all arrays of mesh 0, then all
+  arrays of mesh 1. Each array starts on a 16-byte boundary (`0xCD` filler).
+- The skeleton header keeps its four `u32` fields (§5), but its three offsets
+  count from the **skeleton header**, not from the section.
+
+Per-vertex encodings (positions, normals, UVs, bone bytes, weight words) are
+unchanged.
+
+## 4b. Room geometry (`.fsd` section 14): `PC-verified`
+
+Rooms use their own records, unlike §4. Offsets are relative to the section.
+`dmc room` converts all 106 rooms (21,053 objects, 3.2 M vertices, 2.0 M
+triangles); renders of `r002` (Dante's office) and `r100` (the castle hall)
+match the game, with backface culling on, which confirms the up axis (+Y) and
+the winding rule below.
+
+```
+header (16 bytes):
+    u16 objectCount          (16-bit: 29 rooms have more than 255 objects)
+    u8  texCount             (images in section 34)
+    u8  _
+    4 × 0xCC
+    u64 matrixOffset         (objectCount 4×4 matrices, one per object)
+object[objectCount]   stride 40:
+    u8  meshCount
+    u8  0
+    u16 totalVerts           (sum over its meshes)
+    4 × 0xCC
+    u64 firstMeshOffset
+    8 bytes flags            (unknown; e.g. 00 20 04 00 00 06 00 00)
+    i16 × 6                  world bounds: x max, x min, y max, y min, z max, z min
+    4 × 0xCD
+```
+
+The object table ends where the first mesh begins.
+
+**Placement.** Vertices are in object space. Object *i* is placed by matrix
+*i* at `matrixOffset + 64·i`: 16 `f32`, row-major, `world = M · [x, y, z, 1]`
+(translation in the last column, bottom row `0 0 0 1`). The stored bounds
+check this: for 99.5% of objects, the transformed vertices span exactly the
+stored bounds (±2 units). The bounds are `i16` and wrap in the large rooms
+(coordinates reach about ±50,000), so they compare modulo 65,536. The other
+0.5% (102 objects, about half of them in `r10c`, `r30a`, `r408` and `r40d`)
+disagree for a reason not known yet.
+
+Meshes of an object form a **chain**: each mesh is a 32-byte descriptor,
+16-byte aligned, followed by its own vertex arrays, and the next mesh starts
+where this one ends.
+
+```
+mesh descriptor (32 bytes), fields in 16-byte units from the descriptor:
+    u16 numVerts
+    u16 texIndex             (into the room's texture container, section 34)
+    u16 posAt                (always 2: arrays follow the descriptor)
+    u16 nrmAt
+    u16 uvAt
+    u16 colourAt
+    u16 _                    (always 0)
+    u16 nextAt               (the next mesh, or the end of the chain)
+    8 × 0x00, 8 × 0xCD
+arrays (each padded to 16 with 0xCD):
+    pos    f32×3 per vertex
+    nrm    f32×3 per vertex
+    uv     i16×2 per vertex, /4096 (as §4)
+    colour 4 bytes per vertex: flags, then three colour bytes
+```
+
+The first byte of each colour entry drives the triangle strip:
+
+| Bit | Meaning |
+|---|---|
+| 0 | winding: 1 → triangle `(i-2, i-1, i)` is front-facing as written; 0 → reversed |
+| 1 | restart: this vertex does not close a triangle |
+| 2 | always set |
+| 3 | unknown (set on ~15% of vertices) |
+
+Checked on 30 rooms (5,645 meshes): the first two vertices of every mesh have
+bit 1 set, and the winding bit agrees with the vertex normals on 99.4% of 450k
+triangles. The rest are probably curved surfaces, where the smoothed normals
+disagree with the flat face.
+
+The three colour bytes are vertex lighting. About a third of meshes are
+grey; the rest are coloured, and the first byte runs lower than the other
+two, but the channel order and scale (values reach 255) are not confirmed.
+`dmc room` exports them as-is, divided by 255.
+
+Normals are unit length except in `r40b`, where they are scaled by about
+1.8·10⁻⁵ (directions intact), and in `r305`, which has 4 NaN normals.
+
+## 4c. Other room sections: `speculative` unless noted
+
+Every `.fsd` has 35 section slots. From `r002.fsd` and a survey of all 106
+rooms (62 distinct sets of non-empty sections):
+
+| Section | Size in r002 | Observation |
+|---|---:|---|
+| 0 | 0x80 | small parameter block (floats, `0xFF` runs); always 0x80 |
+| 1 | 0x90 | floats (e.g. 32.0, 48.0, 96.0); always 0x90 |
+| 3 | 0x2C00 | fixed 11,264 bytes (105 rooms): a 0x80-byte copy of one entry, then 63 slots of 0xB0 bytes (see below). **Door/entry-point candidate** |
+| 4, 5 | 0x6300 each | multiples of 3,168 bytes; float colours (e.g. 163, 157, 144) and positions. **Lighting candidate** (two sets) |
+| 9 | 0x32C0 | **collision** (§4d, `PC-verified`), then an object culling tree and a table not parsed yet |
+| 14 | — | room geometry (§4b, `PC-verified`) |
+| 15 | 0x30 | a permutation of 0..0x20 (draw or object order?); always 0x30 |
+| 17 | 0x400C90 | texture container: 8 × 512² DXT5 |
+| 18 | 0x14D0 | offset pack (§9), same shape as `Etc/effcom.anm` |
+| 19 | 0x22F80 | 0 to 5.9 MB; same header shape as `Etc/def_efm.omd` (effect models?) |
+| 22–29 | ~0x5B0–0xCE0 | offset/size packs (§9) of messages in the same glyph encoding as `.msg`. Probably the room's text in several languages |
+| 30 | 0x206470 | **event package**: a `PLAYER DATA` block, then fixed 64-byte path records naming the enemy models used (`../data/emd/em20.emd`), the room's event scripts (`../event/stage0/r0020107.ecd`, …) and per-enemy motion curves (`../event/motion/em20/em200107.fcv`, …) |
+| 34 | 0x372A10 | texture container used by the geometry (`texCount` images) |
+
+**Section 3 slots.** Each 0xB0-byte slot is a 0x30-byte head, then eight
+`f32×4`:
+
+- The head's first `u32` packs a type byte (`01`, `02`, `03`, `07`), a
+  sub-type byte and flag bytes (`0x11`, `0x21`, `0x91`, `0xA1`, `0xC1`),
+  followed by either a position (`f32 x, y, z`) or small integers (e.g.
+  `01 00 03 00 03 00 …` in slots of sub-type `0x0D`).
+- Vector 0 is a point on a floor (y = the floor height). Vector 1 is a point
+  500 units higher and about 1,000–1,500 units away. Vectors 2–7 are ± unit
+  axes, rotated about Y.
+
+Rendering `r100` with vector 1 as the eye and vector 0 as the target gives
+views pressed against walls, not composed shots, so these are probably not
+fixed cameras. A floor point plus a facing suggests door entry points, with
+the sub-type `0x0D` integers as door links. Fixed cameras are not located
+yet.
+
+## 4d. Room collision (`.fsd` section 9): `PC-verified` (106/106 rooms, 62,614 polygons)
+
+A box tree whose leaves hold the collision polygons. It starts at offset 0 of
+section 9. Other data follows it.
+
+```
+header (16 bytes):
+    u32 topNodeCount
+    u32 polygonCount
+    u32 _ (always 1)
+    u32 _ (always 0)
+node (32 bytes):
+    i32 centre x, y, z        room units
+    i16 halfExtent x, y, z
+    u16 childCount            0 = leaf
+    u32 count                 a leaf: polygons that follow it
+    u32 span                  bytes from this node to the end of its subtree;
+                              0 on a last sibling
+    u32 firstPolygon          a leaf: index of its first polygon
+polygon (48 bytes), right after its leaf:
+    u32 0xFFFFFFFF
+    i16 × 3 × 4               vertices, relative to the leaf's centre
+    u32 flags
+    f32 nx, ny, nz            unit normal
+    f32 _                     usually 0 (non-zero on 6% of polygons)
+```
+
+Top-level nodes follow the header one after another. A node's children, or a
+leaf's polygons, follow the node. Checks that hold in every room: the
+polygon indices form a permutation of `0..polygonCount`, and every non-zero
+span equals the bytes the subtree actually occupies.
+
+A polygon is a quad `(v0, v1, v2, v3)` drawn as triangles `(0, 1, 2)` and
+`(2, 1, 3)`. It is a triangle when `v3 == v2` (about half of them). `(v0, v1,
+v2)` winds counter-clockwise around the stored normal on 62,523 of 62,530
+non-degenerate polygons. 4,262 quads are not planar within 2 units.
+
+Flag bits, compared against the normal (floor `ny > 0.7`, ceiling
+`ny < −0.7`, wall `|ny| < 0.3`):
+
+| Bit | Seen on |
+|---|---|
+| `0x1` | floors only (11,409) |
+| `0x2` | floors (5,737), a few slopes |
+| `0x10` | walls, ceilings, slopes (40,414); almost never floors |
+| `0x40000` | ceilings only (6,825) |
+| `0x1000` | most polygons of every kind (51,950) |
+| others (`0x8`, `0x20`, `0x40`, `0x80`, `0x100`, `0x200`, `0x8000`, `0x10000`, …) | not understood; surface materials or special volumes are likely |
+
+Renders of `r100` (the castle hall) show the walls, pillars, stairs, the
+statue's plinth and the chandeliers' hulls in place over the room geometry.
+
+## 4e. Cameras (`.fsd` section 2): layout `PC-verified`, meaning partly inferred
+
+Present in 98 rooms (560–46,480 bytes); absent from the prologue rooms
+(`r002`, `r00d`, `r00e`) and from `r114`, `r318`, `r508`, `r50a`, `r50c`.
+Parsed by `dmc_formats::camera` (`Room::cameras`): 1,575 cameras in 97 rooms.
+
+Header (16 bytes): `u32 count`, 4 bytes of leftover memory, the tag
+`ver`, 4 more leftover bytes. Only `r503` lacks the tag: it uses an
+older, smaller record layout that is not handled yet.
+
+Records follow the header back to back. A record is 0x220 bytes, plus
+`16·n` rail bytes when `flags & 0x10`. This walks every version-2 room
+exactly. Offsets are from the record start:
+
+| Off | Field | Reading |
+|---|---|---|
+| 0x00 | f32×4 A (w = 1) | activation-zone corner |
+| 0x10 | f32×4 B (w = 1) | opposite zone corner |
+| 0x20 | 6 × f32×4 (w = 0) | outward unit normals of the zone's faces: faces 0–2 pass through B, faces 3–5 through A. The zone is the convex hexahedron they bound |
+| 0x80 | f32×4 | look-at offset, usually `(0, 900, 0)`: Dante's head height (Dante ≈ 900 units tall) |
+| 0x90 | f32×4 | equals the last point of the look-at rail |
+| 0xA0 | f32×4 | equals the last point of the eye rail |
+| 0xC0 | f32×4 | unknown point |
+| 0xD0 | u8[128] | mostly `0x01`, some `0xFF`: per-object flags? (hiding objects that block the view is a guess) |
+| 0x150 | u8[8] | type bytes, e.g. `00 00 00 01 02 02 6e 00` (unknown) |
+| 0x158 | u32 flags | `0x10`: the record ends with rails |
+| 0x15C | u32 n | rail point count (both rails together) |
+| 0x168 | f32, f32 | arc lengths of the look-at and eye rails; they match the points exactly |
+| 0x180 | f32 | 55.0 in 44 of 53 `r100` records (also 54.6, 49.7, 42.6, 39.9, 25.1): the field of view in degrees, probably |
+| 0x190 | i32×4 | usually −1 (links to other cameras?) |
+| 0x220 | n × f32×4 | the look-at rail (n/2 points, small fourth component), then the eye rail (n/2 points, w = 1) |
+
+Evidence for the zone reading: in 1,574 of 1,575 records, A and B lie on
+the zone's boundary. Across the 97 rooms, 87% of floor collision polygons
+(§4d), sampled 100 units above their centres, fall inside at least one zone.
+Arbitrary boxes would not cover the walkable floor like that. The rest are
+probably floors the player can't reach (tops of props, ledges).
+
+Evidence for the rails: rendering `r100` record 1 from each eye-rail point
+towards the matching look-at point gives a coherent low tracking shot
+along the hall floor.
+
+Still to confirm against the running game: how the player's position picks
+a point on the rails, what the non-rail records do (fixed or tracking
+cameras), whether the FOV is vertical or horizontal, and what the type bytes
+and object flags mean.
+
+## 5. Skeleton: `PS3-community`, layout `PC-verified`
 
 At `base + skeletonOffset`:
 
@@ -129,6 +457,7 @@ u32 transformsOffset    → boneCount × {f32 x, y, z (offset from parent), f32 
 u32 boneCount
 ```
 
+On PC the three offsets count from the skeleton header itself (§4.2).
 Bones have no names. We call them `bone00`, `bone01`, and so on, in file order.
 
 ## 6. Motion bank: `PS3-community`
@@ -167,6 +496,23 @@ motion (a translation added to bone 0). Every other channel id is
 
 Motions are keyed at **60 fps**.
 
+### 6.1 PC motion banks: `PC-verified` (`pl00` §6: 215 motions, §7: 11; `em00` §3: 84, §5: 5)
+
+The bank layout is the same as above: `u32 count`, `u32 0`, pairs of `u32`
+motion and event offsets, and 32-bit channel tables. The difference is
+channel 0, which is not a Hermite rotation on PC. It holds one or more
+blocks, placed before the motion's event table:
+
+```
+u16 count
+u16 flags                 (0x0000, 0x8000, or uninitialised 0x4444)
+count × u32 word          (steps by 0x40 per frame; flag bits such as 0x08000000)
+```
+
+Motions that share a body (the same motion offset, different event offsets)
+see a different number of these blocks before their own event table. What the
+words mean is not known yet.
+
 ## 7. Leg IK: `PS3-community`
 
 The skeleton's flag table marks two-bone chains. A root flag (`3, 4, 5, 6, 0x11,
@@ -182,6 +528,57 @@ hitbox, SFX and effect triggers, which Phase 6 will need.
 
 ## 8. Unknown / to discover on PC
 
-Room collision, camera placement, room scripts and triggers, enemy spawn
-tables, audio banks, FMV and UI textures are not yet located. Track them in
-[`COVERAGE.md`](COVERAGE.md).
+Camera placement, room scripts and triggers, and enemy spawn tables are not
+decoded yet; §4c lists the candidate room sections. Collision is §4d. Track
+them in [`COVERAGE.md`](COVERAGE.md).
+
+## 9. Packs: `PC-verified` (headers), contents partly known
+
+Many `.dat`, `.itm`, `.bnd`, `.anm` and `.msg` files, and several room
+sections, are simple tables of payloads with no magic. Two shapes occur:
+
+| Shape | Header | Seen in |
+|---|---|---|
+| **offset pack** | `u32 count`, `count × u32 offset`, padded to 16. Payload `i` runs to the next-highest offset or the end of the file | 109 of 119 `.dat` (`memcard*.dat`, `item_st*.dat`, `memicon.dat`, `memtex.dat`, …), 7 `mssn_clr.bnd`, 3 `.anm` (`effcom.anm`), room section 18 |
+| **offset/size pack** | `u32 count`, `count × {u32 offset, u32 size}`, padded to 16 | all 69 `.itm`, all 9 `.msg`, 8 `act_init.dat`, 2 `.anm` (`efflife.anm`), room sections 22–29 |
+
+The first offset always equals the padded header size, which makes both shapes
+easy to recognise. Payloads found so far are TM2 containers (§2) in the
+`.dat`/`.bnd`/`.itm` UI packs, and messages in `.msg`. Messages are strings of
+glyph indices with control bytes (`0x7E` separators, `0x05 xx` and
+`0x0E 00 50` sequences). The encoding is not decoded yet.
+
+Not packs: the other 7 `.bnd` (`mssn_ini.bnd`) are bare TM2 containers.
+`Etc/first.dat` (starts with `u32 0`), `def_efm.omd` and `effcom.eca` are
+still unknown.
+
+## 10. `ipum` image sequences (`.ip2`): `PC-verified` (headers)
+
+The PS2 game played short clips with the IPU (MPEG-2 intra frames). The HD
+port replaced each clip with a sequence of DDS frames:
+
+```
+char[4] "ipum"
+u16 _ (0), u16 _ (1)
+u16 width, u16 height
+u32 frameCount            (30 to 120)
+frameCount × {
+    char[4] "frmj"
+    u32 size
+    DDS file (size bytes)
+}
+```
+
+All 470 files walk exactly: the frame count matches and the last frame ends
+at the end of the file.
+
+440 of the 470 `.ip2` files are `mssn*` mission title cards, across the
+per-language `status_*` directories.
+
+## 11. Audio and video: `PC-verified` (containers only)
+
+- `audio/*.bank` start with `RIFF`, then `FEV ` at offset 8: **FMOD Studio**
+  banks. `MasterBank.strings.bank` holds the event names. Decoding the sample
+  data (FSB5 inside the bank) is not implemented yet.
+- `Video/*.wmv` are ASF files (GUID `30 26 B2 75 8E 66 CF 11 …`), i.e. Windows
+  Media Video. Standard decoders (FFmpeg and others) read them.
