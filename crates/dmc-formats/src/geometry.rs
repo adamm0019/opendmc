@@ -56,6 +56,16 @@ impl Variant {
         self.ptr_size()
     }
 
+    /// V as used for sampling, from V as stored (and back: it is its own
+    /// inverse). PS3 notes: flipped. PC: the DDS images are stored top-down
+    /// and V is used as is (checked by eye on Dante's texture atlas).
+    pub fn texture_v(self, v: f32) -> f32 {
+        match self {
+            Variant::Ps3 => 1.0 - v,
+            Variant::Pc64 => v,
+        }
+    }
+
     fn ptr(self, r: &Reader, at: usize) -> Result<usize> {
         match self {
             Variant::Ps3 => Ok(r.u32(at)? as usize),
@@ -271,7 +281,7 @@ fn parse_mesh(r: &Reader, variant: Variant, d: usize) -> Result<Mesh> {
         m.normals.push(r.vec3(nrm + 12 * k)?);
         let u = r.i16(uv + 4 * k)? as f32 / 4096.0;
         let v = r.i16(uv + 4 * k + 2)? as f32 / 4096.0;
-        m.uvs.push([u, 1.0 - v]);
+        m.uvs.push([u, variant.texture_v(v)]);
         let b = r.bytes(bone + 4 * k, 4)?;
         m.joints.push([b[1] >> 2, b[2] >> 2, b[3] >> 2]);
         let word = r.u16(weight + 2 * k)?;
@@ -409,7 +419,7 @@ pub fn build(
                     1 => w.vec3(m.normals[k]),
                     2 => w
                         .i16((m.uvs[k][0] * 4096.0) as i16)
-                        .i16(((1.0 - m.uvs[k][1]) * 4096.0) as i16),
+                        .i16((variant.texture_v(m.uvs[k][1]) * 4096.0) as i16),
                     3 => w
                         .u8(0)
                         .u8(m.joints[k][0] << 2)
