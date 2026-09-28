@@ -94,6 +94,12 @@ pub struct Motion {
     pub channel_ids: Vec<u8>,
     /// All channels, starting with the two id-less ones.
     pub channels: Vec<Channel>,
+    /// Channel 0 as stored on PC: blocks of words before the event table
+    /// (`u16 count`, `u16` flags or filler, `count` × u32). The words step by
+    /// 0x40 per frame with flag bits above; their meaning is not known yet
+    /// (`docs/formats/README.md` §6). Empty when channel 0 is empty or keyed
+    /// like the other channels.
+    pub frame_words: Vec<u32>,
     /// Offset of this motion's event table from the bank start (format unknown).
     pub event_offset: u32,
 }
@@ -194,20 +200,51 @@ fn parse_motion(r: &Reader, base: usize, event_off: u32) -> Result<Motion> {
     let table = base + 4 + (channel_count - 2).next_multiple_of(4);
     let limit = (event_off as usize).saturating_sub(base);
     let mut channels = Vec::with_capacity(channel_count);
+    let mut frame_words = Vec::new();
     for c in 0..channel_count {
         let rel = r.u32(table + 4 * c)? as usize;
-        channels.push(if rel == 0 || (limit > 0 && rel >= limit) {
-            Channel::default()
-        } else {
-            parse_channel(r, base + rel)?
-        });
+        if rel == 0 || (limit > 0 && rel >= limit) {
+            channels.push(Channel::default());
+            continue;
+        }
+        if c == 0
+            && let Some(words) = word_list(r, base + rel, base + limit)?
+        {
+            frame_words = words;
+            channels.push(Channel::default());
+            continue;
+        }
+        channels.push(parse_channel(r, base + rel)?);
     }
     Ok(Motion {
         frames,
         channel_ids: ids,
         channels,
+        frame_words,
         event_offset: event_off,
     })
+}
+
+/// Channel 0 as blocks of words (`u16 count`, `u16` flags or filler, `count`
+/// × u32), read while whole blocks fit before `end`. Motions that share a body
+/// see different amounts of it, so this never fails; `None` when not even one
+/// block fits.
+fn word_list(r: &Reader, at: usize, end: usize) -> Result<Option<Vec<u32>>> {
+    let mut words = Vec::new();
+    let mut pos = at;
+    let mut blocks = 0;
+    while pos + 4 <= end {
+        let n = r.u16(pos)? as usize;
+        if n == 0 || pos + 4 + 4 * n > end {
+            break;
+        }
+        for k in 0..n {
+            words.push(r.u32(pos + 4 + 4 * k)?);
+        }
+        pos += 4 + 4 * n;
+        blocks += 1;
+    }
+    Ok((blocks > 0).then_some(words))
 }
 
 fn parse_channel(r: &Reader, mut o: usize) -> Result<Channel> {
@@ -238,10 +275,13 @@ pub struct NewMotion {
     pub frames: u16,
     pub channel_ids: Vec<u8>,
     pub channels: Vec<Channel>,
+    /// Written as channel 0's word list (PC) when not empty.
+    pub frame_words: Vec<u32>,
 }
 
 /// Build a bank in the documented layout. Each motion's (empty) event table is
-/// placed right after it, so `event_offset` bounds its channels as in the game.
+/// placed right after it, so `event_offset` bounds its channels as in the game;
+/// a channel-0 word list sits directly before it.
 pub fn build(endian: Endian, motions: &[NewMotion]) -> Vec<u8> {
     let mut w = Writer::new(endian);
     w.u32(motions.len() as u32).u32(0);
@@ -268,6 +308,13 @@ pub fn build(endian: Endian, motions: &[NewMotion]) -> Vec<u8> {
                 for k in &t.keys {
                     w.f32(k.value).f32(k.in_tangent).f32(k.out_tangent);
                 }
+            }
+        }
+        if !m.frame_words.is_empty() {
+            w.set_u32(ch_table, (w.pos() - base) as u32);
+            w.u16(m.frame_words.len() as u16).bytes(&[0x44, 0x44]);
+            for &v in &m.frame_words {
+                w.u32(v);
             }
         }
         let events = w.pos();
@@ -344,6 +391,7 @@ mod tests {
                         rot.clone(),
                         Channel::default(),
                     ],
+                    frame_words: vec![0, 0x40, 0x0800_0080],
                 }],
             );
             let bank = MotionBank::parse(&bytes, e).unwrap();
@@ -351,6 +399,7 @@ mod tests {
             assert_eq!(m.frames, 30);
             assert_eq!(m.channels.len(), 4);
             assert!(m.channels[0].is_empty());
+            assert_eq!(m.frame_words, vec![0, 0x40, 0x0800_0080]);
             assert_eq!(m.channels[1], root);
             assert_eq!(m.channels[2], rot);
             assert!((m.duration_seconds() - 0.5).abs() < 1e-6);
@@ -370,6 +419,7 @@ mod tests {
             frames: 1,
             channel_ids: vec![0x80, 1, 0x81, 0x83, 0x82, 0x84],
             channels: vec![Channel::default(); 8],
+            frame_words: Vec::new(),
             event_offset: 0,
         };
         let targets: Vec<_> = (0..8).map(|i| m.target(i, &skel).unwrap()).collect();
