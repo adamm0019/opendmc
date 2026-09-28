@@ -325,7 +325,7 @@ rooms (62 distinct sets of non-empty sections):
 |---|---:|---|
 | 0 | 0x80 | small parameter block (floats, `0xFF` runs); always 0x80 |
 | 1 | 0x90 | floats (e.g. 32.0, 48.0, 96.0); always 0x90 |
-| 3 | 0x2C00 | fixed 11,264 bytes (105 rooms): a 0x80-byte copy of one entry, then 63 slots of 0xB0 bytes (see below). **Door/entry-point candidate** |
+| 3 | 0x2C00 | fixed 11,264 bytes (105 rooms): **triggers**, doors among them (§4g) |
 | 4, 5 | 0x6300 each | multiples of 3,168 bytes; float colours (e.g. 163, 157, 144) and positions. **Lighting candidate** (two sets) |
 | 9 | 0x32C0 | **collision** (§4d, `PC-verified`), then an object culling tree and a table not parsed yet |
 | 14 | — | room geometry (§4b, `PC-verified`) |
@@ -337,23 +337,6 @@ rooms (62 distinct sets of non-empty sections):
 | 22–29 | ~0x5B0–0xCE0 | offset/size packs (§9) of messages in the same glyph encoding as `.msg`. Probably the room's text in several languages |
 | 30 | 0x206470 | **event package**: a `PLAYER DATA` block, then fixed 64-byte path records naming the enemy models used (`../data/emd/em20.emd`), the room's event scripts (`../event/stage0/r0020107.ecd`, …) and per-enemy motion curves (`../event/motion/em20/em200107.fcv`, …) |
 | 34 | 0x372A10 | texture container used by the geometry (`texCount` images) |
-
-**Section 3 slots.** Each 0xB0-byte slot is a 0x30-byte head, then eight
-`f32×4`:
-
-- The head's first `u32` packs a type byte (`01`, `02`, `03`, `07`), a
-  sub-type byte and flag bytes (`0x11`, `0x21`, `0x91`, `0xA1`, `0xC1`),
-  followed by either a position (`f32 x, y, z`) or small integers (e.g.
-  `01 00 03 00 03 00 …` in slots of sub-type `0x0D`).
-- Vector 0 is a point on a floor (y = the floor height). Vector 1 is a point
-  500 units higher and about 1,000–1,500 units away. Vectors 2–7 are ± unit
-  axes, rotated about Y.
-
-Rendering `r100` with vector 1 as the eye and vector 0 as the target gives
-views pressed against walls, not composed shots, so these are probably not
-fixed cameras. A floor point plus a facing suggests door entry points, with
-the sub-type `0x0D` integers as door links. Fixed cameras are not located
-yet.
 
 ## 4d. Room collision (`.fsd` section 9): `PC-verified` (106/106 rooms, 62,614 polygons)
 
@@ -557,6 +540,48 @@ props 3–7). The candidates checked do not hold transforms:
 Placement may come from the motion data or from per-room code. Until it is
 found, `dmc room` writes each room's props side by side in
 `<room>.props.glb`, for inspection.
+
+## 4g. Triggers and doors (`.fsd` section 3): layout `PC-verified`, doors `PC-verified`
+
+Parsed by `dmc_formats::triggers` (`Room::triggers`). The section is exactly
+64 records of 0xB0 bytes in 105 rooms; `r114` has none. An earlier reading
+took a 0x80-byte header and 63 slots, which paired each head with the next
+record's vectors.
+
+```
+record (0xB0):
+    f32×4 × 8      the volume (below)
+    head (0x30):
+        u8 kind, u8 sub, u8 flags[2]    kind 0 = empty (5,650 records, flags 00 11)
+        u32 0
+        f32×3 point                     doors: where the player arrives
+        u32
+        u16 room                        doors: the room they lead to (r%03x)
+        u8 extra                        doors: 0, 2 or 3
+        …                               zero in 842 of 1,070 records
+```
+
+**Volumes.** Most records use the camera-zone box (§4e): corners `A` and `B`
+(w = 1), then six outward unit normals (w = 0), the first three through
+`B` and the last three through `A`. In 986 of 1,070 non-empty records both
+corners lie on the box. In 107 records the normal slots hold `(0, 0, 0, 1)`
+instead. Vector 0 is then a centre and vector 1 a size such as
+`(500, 500, 0)`, so probably a cylinder; `Volume::Round` takes it as one,
+unconfirmed.
+
+**Doors.** Doors are records with kind 2 or 3, sub 0 and a room id: 220 of
+them. Checked against the other rooms:
+- 216 name a room in the archive. The other four name `r00f`, `r105` and
+  `r20a` (twice), which it lacks.
+- 180 of those 216 arrival points lie within 150 units of a floor in the
+  target room's collision (§4d).
+- 166 target rooms have a door leading back. For 108 of them, the arrival
+  point is within 800 units of that return door's volume, so you arrive
+  beside the door you'd use to go back.
+
+`r100` alone has doors to `r101`, `r11b`, `r110`, `r116` and `r106`. The
+other kinds (sub-kinds 1–14 of kind 3, kind 7, …) are not identified yet;
+their heads carry small integers or points instead.
 
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 

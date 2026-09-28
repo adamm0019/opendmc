@@ -40,6 +40,8 @@ pub struct RoomStats {
     pub cameras: Option<usize>,
     /// Props exported (section 19).
     pub props: usize,
+    /// Doors among the triggers (section 3).
+    pub doors: usize,
 }
 
 impl RoomStats {
@@ -55,7 +57,7 @@ impl fmt::Display for RoomStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5} cam={:>2} props={:2}{}",
+            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5} cam={:>2} props={:2} doors={:2}{}",
             self.objects,
             self.meshes,
             self.vertices,
@@ -67,6 +69,7 @@ impl fmt::Display for RoomStats {
             self.collision,
             self.cameras.map_or("-".to_string(), |n| n.to_string()),
             self.props,
+            self.doors,
             if self.looks_valid() {
                 ""
             } else {
@@ -229,6 +232,13 @@ pub fn room_to_glb(data: &[u8], out: &Path) -> Result<RoomStats> {
         fs::write(
             out.with_extension("cameras.json"),
             serde_json::to_vec_pretty(&cams)?,
+        )?;
+    }
+    if let Ok(triggers) = room.triggers(data) {
+        stats.doors = triggers.doors().count();
+        fs::write(
+            out.with_extension("triggers.json"),
+            serde_json::to_vec_pretty(&triggers)?,
         )?;
     }
     if room.section(data, props::SECTION).is_some() {

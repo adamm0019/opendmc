@@ -297,8 +297,15 @@ fn pc_room() -> Vec<u8> {
             room_textures: vec![0],
         }),
     ]);
+    let triggers = dmc_formats::triggers::build(&[dmc_formats::triggers::NewDoor {
+        min: [10., 0., -1.],
+        max: [11., 500., 1.],
+        room: 0x101,
+        arrival: [0., 0., 0.],
+    }]);
     room::build_sections(&[
         (dmc_formats::camera::SECTION, Some(&cameras)),
+        (dmc_formats::triggers::SECTION, Some(&triggers)),
         (dmc_formats::collision::SECTION, Some(&collision)),
         (room::GEOMETRY_SECTION, Some(&geometry)),
         (dmc_formats::props::SECTION, Some(&props)),
@@ -336,7 +343,10 @@ fn pc_room_pipeline() {
     let one = root.join("one.glb");
     let out = dmc(&["room", &spec, s(&one)]);
     assert!(
-        out.contains("objects=  2") && out.contains("bounds=2/2") && out.contains("props= 1"),
+        out.contains("objects=  2")
+            && out.contains("bounds=2/2")
+            && out.contains("props= 1")
+            && out.contains("doors= 1"),
         "{out}"
     );
 

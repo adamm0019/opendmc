@@ -25,6 +25,7 @@ pub mod motion;
 pub mod props;
 pub mod room;
 pub mod texture;
+pub mod triggers;
 
 pub use bytes::{Endian, Reader, Writer};
 pub use error::{FormatError, Result};

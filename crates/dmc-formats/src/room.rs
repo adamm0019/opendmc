@@ -10,6 +10,7 @@ use crate::geometry::PC_PAD;
 use crate::model::{Layout, ModelFile};
 use crate::props::{self, Props};
 use crate::texture::TextureSet;
+use crate::triggers::{self, Triggers};
 use serde::Serialize;
 
 pub const SECTION_COUNT: usize = 35;
@@ -271,6 +272,14 @@ impl Room {
     }
 
     /// The collision tree and polygons of section 9.
+    /// The triggers of section 3 (doors among them).
+    pub fn triggers(&self, data: &[u8]) -> Result<Triggers> {
+        let section = self
+            .section(data, triggers::SECTION)
+            .ok_or_else(|| FormatError::invalid("room", "trigger section is empty"))?;
+        Triggers::parse(section)
+    }
+
     /// The props of section 19.
     pub fn props(&self, data: &[u8]) -> Result<Props> {
         let section = self
