@@ -29,6 +29,8 @@ pub struct Options {
     pub motion: Option<String>,
     /// Show a close-up of the model on the right half of the window.
     pub focus: bool,
+    /// `section[:first]`: show 24 motions of a bank side by side.
+    pub grid: Option<String>,
     pub record: Option<PathBuf>,
     /// Drive the player from the built-in script (`capture::demo_input`).
     pub demo: bool,
@@ -52,6 +54,7 @@ fn parse_args() -> Result<Options, String> {
             "--model" => o.model = Some(args.next().ok_or("--model needs a path")?.into()),
             "--motion" => o.motion = Some(args.next().ok_or("--motion needs section:index")?),
             "--focus" => o.focus = true,
+            "--grid" => o.grid = Some(args.next().ok_or("--grid needs section[:first]")?),
             "--record" => o.record = Some(args.next().ok_or("--record needs a path")?.into()),
             "--demo" => o.demo = true,
             "--screenshot" => {

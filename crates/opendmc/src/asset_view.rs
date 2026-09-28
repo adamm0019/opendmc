@@ -2,8 +2,9 @@
 //! beside the arena, skinned. With `--motion <section>:<index>` it plays that
 //! motion from the model's own motion banks, clocked by the sim tick (60 fps),
 //! so `--screenshot --at-tick N` captures frame N exactly. `--focus` adds a
-//! close-up view of the model on the right half of the window. Nothing is
-//! cached or written.
+//! close-up view of the model on the right half of the window, and
+//! `--grid <section>[:<first>]` shows 24 motions of a bank side by side (to
+//! identify them). Nothing is cached or written.
 
 use crate::Options;
 use bevy::asset::RenderAssetUsages;
@@ -104,11 +105,28 @@ fn pick_motion(data: &[u8], model: &ModelFile, spec: &str) -> Option<Motion> {
     found
 }
 
+/// Everything shared by the instances of one model.
+struct Parts {
+    meshes: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    skeleton: Option<Skeleton>,
+    inverse_bindposes: Option<Handle<SkinnedMeshInverseBindposes>>,
+    /// Model-space offset that centres the model and puts its feet at 0.
+    origin: Vec3,
+    scale: f32,
+}
+
+/// Motions shown by `--grid`, per screenshot page.
+const GRID_COUNT: usize = 24;
+const GRID_COLUMNS: usize = 6;
+const GRID_SPACING: f32 = 2.6;
+/// Far enough from the arena that nothing overlaps.
+const GRID_ORIGIN: Vec3 = Vec3::new(0.0, 0.0, -80.0);
+
 #[allow(clippy::too_many_arguments)]
 fn load_model(
     options: Res<Options>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
+    mut mesh_assets: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
@@ -142,53 +160,24 @@ fn load_model(
         lo = lo.min(Vec3::from_array(*p));
         hi = hi.max(Vec3::from_array(*p));
     }
-    let scale = PREVIEW_HEIGHT / (hi.y - lo.y).max(1e-3);
-    let root = commands
-        .spawn((
-            Transform::from_translation(
-                ANCHOR - Vec3::new((lo.x + hi.x) / 2.0, lo.y, (lo.z + hi.z) / 2.0) * scale,
-            )
-            .with_scale(Vec3::splat(scale)),
-            Visibility::default(),
-        ))
-        .id();
-
-    // Joints: one entity per bone, parented like the skeleton.
     let skeleton = geo.skeleton.clone();
-    let mut joints = Vec::new();
-    if let Some(s) = &skeleton {
-        for (i, o) in s.offsets.iter().enumerate() {
-            let j = commands
-                .spawn((
-                    Transform::from_translation(Vec3::from_array(*o)),
-                    Visibility::default(),
-                    Name::new(format!("bone{i:02}")),
-                ))
-                .id();
-            joints.push(j);
-        }
-        for (i, p) in s.parents.iter().enumerate() {
-            let parent = match p {
-                Some(p) if (*p as usize) < joints.len() && *p as usize != i => joints[*p as usize],
-                _ => root,
-            };
-            commands.entity(joints[i]).insert(ChildOf(parent));
-        }
-    }
-    let skin = skeleton.as_ref().map(|s| {
-        let inverse: Vec<Mat4> = s
-            .bind_positions()
-            .iter()
-            .map(|b| Mat4::from_translation(-Vec3::from_array(*b)))
-            .collect();
-        SkinnedMesh {
-            inverse_bindposes: bindposes.add(SkinnedMeshInverseBindposes::from(inverse)),
-            joints: joints.clone(),
-        }
-    });
-
-    let max_joint = joints.len().saturating_sub(1) as u16;
-    let mut count = 0;
+    let max_joint = skeleton
+        .as_ref()
+        .map_or(0, |s| s.bone_count().saturating_sub(1)) as u16;
+    let mut parts = Parts {
+        meshes: Vec::new(),
+        inverse_bindposes: skeleton.as_ref().map(|s| {
+            let inverse: Vec<Mat4> = s
+                .bind_positions()
+                .iter()
+                .map(|b| Mat4::from_translation(-Vec3::from_array(*b)))
+                .collect();
+            bindposes.add(SkinnedMeshInverseBindposes::from(inverse))
+        }),
+        skeleton,
+        origin: Vec3::new((lo.x + hi.x) / 2.0, lo.y, (lo.z + hi.z) / 2.0),
+        scale: PREVIEW_HEIGHT / (hi.y - lo.y).max(1e-3),
+    };
     for m in geo.objects.iter().flat_map(|o| &o.meshes) {
         let tris = m.triangles();
         if tris.is_empty() {
@@ -201,7 +190,7 @@ fn load_model(
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, m.positions.clone());
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, m.normals.clone());
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, m.uvs.clone());
-        if skin.is_some() {
+        if parts.skeleton.is_some() {
             let idx: Vec<[u16; 4]> = m
                 .joints
                 .iter()
@@ -220,15 +209,62 @@ fn load_model(
             .get(m.tex_index as usize)
             .cloned()
             .unwrap_or_else(|| fallback.clone());
-        let mut child = commands.spawn((
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(material),
-            ChildOf(root),
-        ));
-        if let Some(skin) = &skin {
-            child.insert(skin.clone());
+        parts.meshes.push((mesh_assets.add(mesh), material));
+    }
+
+    let size = windows
+        .iter()
+        .next()
+        .map_or(UVec2::new(1280, 720), |w| w.physical_size());
+    if let Some(spec) = options.grid.as_deref() {
+        let (section, start) = spec.split_once(':').unwrap_or((spec, "0"));
+        let (Ok(section), Ok(start)) = (section.parse::<usize>(), start.parse::<usize>()) else {
+            return error!("--grid needs <section>[:<first motion>]");
+        };
+        let Some(bank) = model
+            .section(&data, section)
+            .and_then(|b| MotionBank::parse(b, model.endian).ok())
+        else {
+            return error!("section {section} is not a motion bank");
+        };
+        let shown: Vec<_> = bank
+            .motions
+            .into_iter()
+            .enumerate()
+            .skip(start)
+            .take(GRID_COUNT)
+            .collect();
+        for (k, (index, motion)) in shown.iter().enumerate() {
+            let (col, row) = ((k % GRID_COLUMNS) as f32, (k / GRID_COLUMNS) as f32);
+            let at = GRID_ORIGIN
+                + Vec3::new(
+                    (col - (GRID_COLUMNS as f32 - 1.0) / 2.0) * GRID_SPACING,
+                    0.0,
+                    row * GRID_SPACING * 1.4,
+                );
+            spawn_instance(&mut commands, &parts, at, motion.clone());
+            info!("grid cell {k}: motion {section}:{index}");
         }
-        count += 1;
+        let rows = shown.len().div_ceil(GRID_COLUMNS) as f32;
+        let centre = GRID_ORIGIN + Vec3::new(0.0, 1.0, (rows - 1.0) * GRID_SPACING * 0.7);
+        commands.spawn((
+            Camera3d::default(),
+            Camera {
+                order: 2,
+                ..default()
+            },
+            Transform::from_translation(centre + Vec3::new(0.0, 7.0, 13.0))
+                .looking_at(centre, Vec3::Y),
+        ));
+        commands.spawn((
+            DirectionalLight {
+                illuminance: 8000.0,
+                ..default()
+            },
+            Transform::from_translation(GRID_ORIGIN + Vec3::new(3.0, 10.0, 12.0))
+                .looking_at(GRID_ORIGIN, Vec3::Y),
+        ));
+        return;
     }
 
     let motion = options
@@ -236,27 +272,18 @@ fn load_model(
         .as_deref()
         .and_then(|spec| pick_motion(&data, &model, spec));
     info!(
-        "{}: {count} meshes, {} vertices, {} texture slots, motion {}",
+        "{}: {} meshes, {} vertices, {} texture slots, motion {}",
         path.display(),
+        parts.meshes.len(),
         geo.vertex_count(),
         slot_materials.len(),
         motion
             .as_ref()
             .map_or("none".into(), |m| format!("{} frames", m.frames))
     );
-    if let Some(skeleton) = skeleton {
-        commands.entity(root).insert(Animated {
-            skeleton,
-            joints,
-            motion,
-        });
-    }
+    spawn_instance(&mut commands, &parts, ANCHOR, motion);
 
     if options.focus {
-        let size = windows
-            .iter()
-            .next()
-            .map_or(UVec2::new(1280, 720), |w| w.physical_size());
         let centre = ANCHOR + Vec3::Y * PREVIEW_HEIGHT * 0.5;
         commands.spawn((
             Camera3d::default(),
@@ -272,6 +299,58 @@ fn load_model(
             Transform::from_translation(centre + Vec3::new(0.0, 0.4, 4.6))
                 .looking_at(centre, Vec3::Y),
         ));
+    }
+}
+
+/// One copy of the model standing at `at`, with its own joints.
+fn spawn_instance(commands: &mut Commands, parts: &Parts, at: Vec3, motion: Option<Motion>) {
+    let root = commands
+        .spawn((
+            Transform::from_translation(at - parts.origin * parts.scale)
+                .with_scale(Vec3::splat(parts.scale)),
+            Visibility::default(),
+        ))
+        .id();
+    let mut joints = Vec::new();
+    if let Some(s) = &parts.skeleton {
+        for (i, o) in s.offsets.iter().enumerate() {
+            joints.push(
+                commands
+                    .spawn((
+                        Transform::from_translation(Vec3::from_array(*o)),
+                        Visibility::default(),
+                        Name::new(format!("bone{i:02}")),
+                    ))
+                    .id(),
+            );
+        }
+        for (i, p) in s.parents.iter().enumerate() {
+            let parent = match p {
+                Some(p) if (*p as usize) < joints.len() && *p as usize != i => joints[*p as usize],
+                _ => root,
+            };
+            commands.entity(joints[i]).insert(ChildOf(parent));
+        }
+    }
+    for (mesh, material) in &parts.meshes {
+        let mut child = commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            ChildOf(root),
+        ));
+        if let Some(inverse_bindposes) = &parts.inverse_bindposes {
+            child.insert(SkinnedMesh {
+                inverse_bindposes: inverse_bindposes.clone(),
+                joints: joints.clone(),
+            });
+        }
+    }
+    if let Some(skeleton) = parts.skeleton.clone() {
+        commands.entity(root).insert(Animated {
+            skeleton,
+            joints,
+            motion,
+        });
     }
 }
 
