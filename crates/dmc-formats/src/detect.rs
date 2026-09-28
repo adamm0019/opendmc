@@ -121,9 +121,9 @@ pub fn entropy(data: &[u8]) -> f32 {
 /// offsets. Returns `None` when the evidence is weak.
 pub fn guess_endian(data: &[u8]) -> Option<Endian> {
     let (mut big, mut little) = (0, 0);
-    for w in data.chunks_exact(4).take(16) {
-        let b = u32::from_be_bytes(w.try_into().unwrap());
-        let l = u32::from_le_bytes(w.try_into().unwrap());
+    for w in data.as_chunks::<4>().0.iter().take(16) {
+        let b = u32::from_be_bytes(*w);
+        let l = u32::from_le_bytes(*w);
         if b == l {
             continue;
         }

@@ -31,7 +31,9 @@ impl Tape {
         let n = u32::from_le_bytes(b.get(4..8)?.try_into().ok()?) as usize;
         let body = b.get(8..8 + n.checked_mul(6)?)?;
         let frames = body
-            .chunks_exact(6)
+            .as_chunks::<6>()
+            .0
+            .iter()
             .map(|c| InputFrame {
                 buttons: u16::from_le_bytes([c[0], c[1]]),
                 move_x: i16::from_le_bytes([c[2], c[3]]),

@@ -273,7 +273,9 @@ impl TextureSet {
             PixelFormat::Argb8888 => {
                 // One ARGB word per texel, in the file's byte order.
                 let out = px[..(w * h * 4) as usize]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .flat_map(|c| match self.endian {
                         Endian::Big => [c[1], c[2], c[3], c[0]],
                         Endian::Little => [c[2], c[1], c[0], c[3]],
