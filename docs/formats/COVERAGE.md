@@ -35,7 +35,8 @@ the checks named in each row.
 | Section table, `Counted64` | `.fsd` (106) | `dmc_formats::model` | parsed | 106/106: 35 slots each (§3.2) |
 | Geometry + mesh tables, `Pc64` | model section 0 | `dmc_formats::geometry` | parsed | `dmc export`: 73/73 to glTF, mean normal length 0.993–1.000 (§4.2) |
 | Skeleton + IK flags | model section 0 | `dmc_formats::geometry` | parsed | bone counts match the geometry header on 73/73 (§5) |
-| Motion bank | pl sections 6/7, em 3/5 | `dmc_formats::motion` | partly understood | `em00` §5 parses with the PS3 layout; `pl00` §6 and `em00` §3 do not yet (§6) |
+| Motion bank | pl sections 6/7, em 3/5 | `dmc_formats::motion` | parsed | `pl00` §6/§7 (215 + 11 motions) and `em00` §3/§5 (84 + 5) parse (§6.1) |
+| Motion channel 0 word blocks | motion bank | `dmc_formats::motion` (skipped) | partly understood | block layout known, meaning unknown (§6.1) |
 | Motion event table | motion bank | — | unknown | — |
 
 ## Rooms (`.fsd`)

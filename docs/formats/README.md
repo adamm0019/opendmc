@@ -155,9 +155,9 @@ and 26), so a section ends at the next-highest offset, not at the next entry.
 
 Section 0 holds the geometry of characters, weapons and enemies. Rooms keep
 theirs in section 14 (§4b). The PS3 notes put the motion banks in sections 6
-(body) and 7 (coat) for players and 3 and 5 for enemies. On PC, `em00`
-section 5 parses with the PS3 motion layout, but `pl00` section 6 and `em00`
-section 3 do not yet (tracked in `COVERAGE.md`).
+(body) and 7 (coat) for players and 3 and 5 for enemies, and the PC files
+agree: `pl00` has 11 sections (0 geometry, 6 body motions, 7 coat motions,
+8 the T32 textures), and `em00` keeps motions in 3 and 5 (§6.1).
 
 ## 4. Geometry section (characters, weapons, enemies)
 
@@ -378,8 +378,24 @@ motion (a translation added to bone 0). Every other channel id is
 | flag 8 | translation |
 | other | scale |
 
-Motions are keyed at **60 fps**. On PC, some banks parse with this layout and
-others do not yet (§3.2).
+Motions are keyed at **60 fps**.
+
+### 6.1 PC motion banks: `PC-verified` (`pl00` §6: 215 motions, §7: 11; `em00` §3: 84, §5: 5)
+
+The bank layout is the same as above: `u32 count`, `u32 0`, pairs of `u32`
+motion and event offsets, and 32-bit channel tables. The difference is
+channel 0, which is not a Hermite rotation on PC. It holds one or more
+blocks, placed before the motion's event table:
+
+```
+u16 count
+u16 flags                 (0x0000, 0x8000, or uninitialised 0x4444)
+count × u32 word          (steps by 0x40 per frame; flag bits such as 0x08000000)
+```
+
+Motions that share a body (the same motion offset, different event offsets)
+see a different number of these blocks before their own event table. What the
+words mean is not known yet.
 
 ## 7. Leg IK: `PS3-community`
 
