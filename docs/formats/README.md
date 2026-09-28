@@ -226,7 +226,9 @@ Two differences beyond widening:
   count from the **skeleton header**, not from the section.
 
 Per-vertex encodings (positions, normals, UVs, bone bytes, weight words) are
-unchanged.
+unchanged, except that V is used as stored rather than flipped: the DDS
+images are top-down, and with the flip Dante's hair samples the skin region
+of his atlas (checked by eye).
 
 ## 4b. Room geometry (`.fsd` section 14): `PC-verified`
 
@@ -283,7 +285,7 @@ mesh descriptor (32 bytes), fields in 16-byte units from the descriptor:
 arrays (each padded to 16 with 0xCD):
     pos    f32×3 per vertex
     nrm    f32×3 per vertex
-    uv     i16×2 per vertex, /4096 (as §4)
+    uv     i16×2 per vertex, /4096; V is flipped for sampling (1 − v)
     colour 4 bytes per vertex: flags, then three colour bytes
 ```
 
@@ -300,6 +302,10 @@ Checked on 30 rooms (5,645 meshes): the first two vertices of every mesh have
 bit 1 set, and the winding bit agrees with the vertex normals on 99.4% of 450k
 triangles. The rest are probably curved surfaces, where the smoothed normals
 disagree with the flat face.
+
+**Texture V.** Room UVs sample correctly with V flipped (`1 − v`), unlike
+the PC character models (§4.2), which use V as stored. Evidence: the
+lettering on the rug in `r002` reads the right way round only with the flip.
 
 The three colour bytes are vertex lighting. About a third of meshes are
 grey; the rest are coloured, and the first byte runs lower than the other
@@ -325,7 +331,7 @@ rooms (62 distinct sets of non-empty sections):
 | 15 | 0x30 | a permutation of 0..0x20 (draw or object order?); always 0x30 |
 | 17 | 0x400C90 | texture container: 8 × 512² DXT5 |
 | 18 | 0x14D0 | offset pack (§9), same shape as `Etc/effcom.anm` |
-| 19 | 0x22F80 | 0 to 5.9 MB; same header shape as `Etc/def_efm.omd` (effect models?) |
+| 19 | 0x22F80 | 0 to 11 MB. **Room props**: `u32 count`, `u32 headerSize` (0x80 in `r100`), then 28-byte entries of seven `u32` (two offsets, four −1 slots, a size-like 0x9680; entries with the top bit set, e.g. `0x80000014`, look like references). The payloads start with §4.2 `Pc64` geometry headers (`r100`: 4 props, probably the chandeliers and other movable pieces). Not parsed yet |
 | 22–29 | ~0x5B0–0xCE0 | offset/size packs (§9) of messages in the same glyph encoding as `.msg`. Probably the room's text in several languages |
 | 30 | 0x206470 | **event package**: a `PLAYER DATA` block, then fixed 64-byte path records naming the enemy models used (`../data/emd/em20.emd`), the room's event scripts (`../event/stage0/r0020107.ecd`, …) and per-enemy motion curves (`../event/motion/em20/em200107.fcv`, …) |
 | 34 | 0x372A10 | texture container used by the geometry (`texCount` images) |
