@@ -119,6 +119,20 @@ The first real contact with the PC files.
 **Exit:** every byte of DMC1 data belongs to a known container, and every
 container type has a coverage status.
 
+**Status: in progress.** Report:
+[`docs/inventory/pc-58ed9634.md`](inventory/pc-58ed9634.md).
+- Container: `data/dmc1/dmc1-0.nbz` is a plain ZIP. FMOD Studio banks and WMV
+  videos sit loose beside it. No `.BDP`.
+- Byte order: little-endian throughout. The texture magic bytes are the same
+  as on PS3, so they can't signal byte order.
+- Layouts: the same records as the PS3 notes, widened for 64-bit (u64
+  offsets, `0xCC` padding). Textures are embedded DDS files. Rooms (`.fsd`)
+  use their own geometry records. All 73 models export; room geometry is
+  mapped for all 106 rooms.
+- Collision, cameras, triggers: candidate sections inside each `.fsd`,
+  not decoded yet. Cutscene/event data: `.fsd` section 30. Audio: FMOD banks.
+  Video: WMV.
+
 ### Phase 2: Asset pipeline *(3–6 weeks)*
 | Asset | Source | Output | Validation |
 |---|---|---|---|
