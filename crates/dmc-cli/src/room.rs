@@ -5,6 +5,7 @@ use crate::archive::Source;
 use crate::export::encode_png;
 use crate::gltf::Glb;
 use anyhow::{Context, Result, bail};
+use dmc_formats::collision::{Collision, surface};
 use dmc_formats::room::{Room, RoomObject};
 use serde_json::{Value, json};
 use std::fmt;
@@ -29,6 +30,8 @@ pub struct RoomStats {
     pub mean_normal_length: f32,
     /// Objects whose transformed vertices fill their stored bounds.
     pub bounds_ok: usize,
+    /// Collision polygons (section 9); 0 when it did not parse.
+    pub collision: usize,
 }
 
 impl RoomStats {
@@ -36,6 +39,7 @@ impl RoomStats {
         self.triangles > 0
             && (0.9..=1.1).contains(&self.mean_normal_length)
             && self.bounds_ok as f32 >= BOUNDS_PASS * self.objects as f32
+            && self.collision > 0
     }
 }
 
@@ -43,7 +47,7 @@ impl fmt::Display for RoomStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{}{}",
+            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5}{}",
             self.objects,
             self.meshes,
             self.vertices,
@@ -52,6 +56,7 @@ impl fmt::Display for RoomStats {
             self.mean_normal_length,
             self.bounds_ok,
             self.objects,
+            self.collision,
             if self.looks_valid() {
                 ""
             } else {
@@ -205,7 +210,69 @@ pub fn room_to_glb(data: &[u8], out: &Path) -> Result<RoomStats> {
         fs::create_dir_all(parent)?;
     }
     fs::write(out, glb.finish(doc))?;
+    if let Ok(col) = room.collision(data) {
+        stats.collision = col.polys.len();
+        collision_to_glb(&col, &out.with_extension("collision.glb"))?;
+    }
     Ok(stats)
+}
+
+/// Surface classes for colouring the collision export.
+const CLASSES: [(&str, [f32; 4]); 4] = [
+    ("ground", [0.2, 0.7, 0.2, 1.0]),
+    ("wall", [0.8, 0.25, 0.2, 1.0]),
+    ("ceiling", [0.2, 0.35, 0.8, 1.0]),
+    ("other", [0.6, 0.6, 0.6, 1.0]),
+];
+
+fn class(flags: u32) -> usize {
+    if flags & (surface::GROUND_A | surface::GROUND_B) != 0 {
+        0
+    } else if flags & surface::CEILING != 0 {
+        2
+    } else if flags & surface::WALL != 0 {
+        1
+    } else {
+        3
+    }
+}
+
+/// The collision polygons as one glTF mesh, a primitive per surface class.
+pub fn collision_to_glb(col: &Collision, out: &Path) -> Result<()> {
+    let mut glb = Glb::default();
+    let mut prims = Vec::new();
+    for (ci, (_, _)) in CLASSES.iter().enumerate() {
+        let tris: Vec<[[f32; 3]; 3]> = col
+            .triangles()
+            .filter(|(_, flags)| class(*flags) == ci)
+            .map(|(t, _)| t)
+            .collect();
+        if tris.is_empty() {
+            continue;
+        }
+        let positions: Vec<[f32; 3]> = tris.iter().flatten().copied().collect();
+        let indices: Vec<[u32; 3]> = (0..tris.len() as u32)
+            .map(|i| [3 * i, 3 * i + 1, 3 * i + 2])
+            .collect();
+        prims.push(json!({
+            "attributes": { "POSITION": glb.floats(&positions, "VEC3", true) },
+            "indices": glb.indices(&indices),
+            "material": ci,
+        }));
+    }
+    let materials: Vec<Value> = CLASSES
+        .iter()
+        .map(|(name, colour)| json!({ "name": name, "pbrMetallicRoughness": { "baseColorFactor": colour } }))
+        .collect();
+    let doc = json!({
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "name": "collision", "mesh": 0 }],
+        "meshes": [{ "name": "collision", "primitives": prims }],
+        "materials": materials,
+    });
+    fs::write(out, glb.finish(doc))?;
+    Ok(())
 }
 
 /// `dmc room`: one file (`path` or `archive.nbz::Fsd/r002.fsd`) to one
@@ -296,6 +363,28 @@ mod tests {
         let data = room::build(&room::build_geometry(0, &[far]), None);
         let r = Room::parse(&data).unwrap();
         assert!(bounds_match(&r.geometry.objects[0]));
+    }
+
+    #[test]
+    fn collision_is_exported_beside_the_room() {
+        use dmc_formats::collision::{self, NewLeaf};
+        let col = collision::build(&[NewLeaf {
+            centre: [0, 0, 0],
+            half_extents: [10, 0, 10],
+            vertices: vec![[-10, 0, -10], [-10, 0, 10], [10, 0, -10], [10, 0, 10]],
+            flags: surface::GROUND_A,
+            normal: [0.0, 1.0, 0.0],
+        }]);
+        let data = room::build_with(&room::build_geometry(0, &[tri(0.0)]), None, Some(&col));
+        let dir = std::env::temp_dir().join(format!("dmc-room-col-{}", std::process::id()));
+        let stats = room_to_glb(&data, &dir.join("r.glb")).unwrap();
+        assert_eq!(stats.collision, 1);
+        assert!(stats.looks_valid());
+        let (doc, _, _) = gltf::import(dir.join("r.collision.glb")).expect("valid glTF");
+        let prim = doc.meshes().next().unwrap().primitives().next().unwrap();
+        assert_eq!(prim.material().name(), Some("ground"));
+        assert_eq!(prim.indices().unwrap().count(), 6);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! Layout: `docs/formats/README.md` §3.2, §4b and §4c.
 
 use crate::bytes::{Endian, Reader, Writer};
+use crate::collision::{self, Collision};
 use crate::error::{FormatError, Result};
 use crate::geometry::PC_PAD;
 use crate::model::{Layout, ModelFile};
@@ -259,6 +260,14 @@ impl Room {
         self.file.section(data, index)
     }
 
+    /// The collision tree and polygons of section 9.
+    pub fn collision(&self, data: &[u8]) -> Result<Collision> {
+        let section = self
+            .section(data, collision::SECTION)
+            .ok_or_else(|| FormatError::invalid("room", "collision section is empty"))?;
+        Collision::parse(section)
+    }
+
     /// The texture container the geometry's `tex_index` values point into.
     /// Returns the container's bytes along with it.
     pub fn textures<'a>(&self, data: &'a [u8]) -> Option<(&'a [u8], TextureSet)> {
@@ -354,12 +363,18 @@ pub fn build_geometry(tex_count: u8, objects: &[NewRoomObject]) -> Vec<u8> {
 /// Build a room file: 35 section slots, `geometry` in section 14 and
 /// `textures` (a texture container) in section 34 when given.
 pub fn build(geometry: &[u8], textures: Option<&[u8]>) -> Vec<u8> {
+    build_with(geometry, textures, None)
+}
+
+/// [`build`], plus a collision section (section 9) when given.
+pub fn build_with(geometry: &[u8], textures: Option<&[u8]>, collision: Option<&[u8]>) -> Vec<u8> {
     let mut w = Writer::new(Endian::Little);
     w.u32(SECTION_COUNT as u32).bytes(&[PC_PAD; 4]);
     let table = w.pos();
     w.zeros(SECTION_COUNT * 8);
     w.pad_to(UNIT, 0);
     for (index, payload) in [
+        (collision::SECTION, collision),
         (GEOMETRY_SECTION, Some(geometry)),
         (TEXTURE_SECTION, textures),
     ] {

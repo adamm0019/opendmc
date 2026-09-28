@@ -309,26 +309,95 @@ two, but the channel order and scale (values reach 255) are not confirmed.
 Normals are unit length except in `r40b`, where they are scaled by about
 1.8·10⁻⁵ (directions intact), and in `r305`, which has 4 NaN normals.
 
-## 4c. Other room sections: `speculative`
+## 4c. Other room sections: `speculative` unless noted
 
 Every `.fsd` has 35 section slots. From `r002.fsd` and a survey of all 106
 rooms (62 distinct sets of non-empty sections):
 
 | Section | Size in r002 | Observation |
 |---|---:|---|
-| 0 | 0x80 | small parameter block (floats, `0xFF` runs) |
-| 1 | 0x90 | floats (e.g. 32.0, 48.0, 96.0) |
-| 3 | 0x2C00 | float records: positions, unit vectors and 3×3 rotations. **Camera candidate** |
-| 4, 5 | 0x6300 each | same header shape as each other. **Collision candidate** |
-| 9 | 0x32C0 | 32-byte records of i32 coordinates and small ints. **Trigger/area candidate** |
-| 14 | — | room geometry (§4b) |
-| 15 | 0x30 | a permutation of 0..0x20 (draw or object order?) |
+| 0 | 0x80 | small parameter block (floats, `0xFF` runs); always 0x80 |
+| 1 | 0x90 | floats (e.g. 32.0, 48.0, 96.0); always 0x90 |
+| 3 | 0x2C00 | fixed 11,264 bytes (105 rooms): a 0x80-byte copy of one entry, then 63 slots of 0xB0 bytes (see below). **Door/entry-point candidate** |
+| 4, 5 | 0x6300 each | multiples of 3,168 bytes; float colours (e.g. 163, 157, 144) and positions. **Lighting candidate** (two sets) |
+| 9 | 0x32C0 | **collision** (§4d, `PC-verified`), then an object culling tree and a table not parsed yet |
+| 14 | — | room geometry (§4b, `PC-verified`) |
+| 15 | 0x30 | a permutation of 0..0x20 (draw or object order?); always 0x30 |
 | 17 | 0x400C90 | texture container: 8 × 512² DXT5 |
 | 18 | 0x14D0 | offset pack (§9), same shape as `Etc/effcom.anm` |
-| 19 | 0x22F80 | same header shape as `Etc/def_efm.omd` (effect models?) |
+| 19 | 0x22F80 | 0 to 5.9 MB; same header shape as `Etc/def_efm.omd` (effect models?) |
 | 22–29 | ~0x5B0–0xCE0 | offset/size packs (§9) of messages in the same glyph encoding as `.msg`. Probably the room's text in several languages |
 | 30 | 0x206470 | **event package**: a `PLAYER DATA` block, then fixed 64-byte path records naming the enemy models used (`../data/emd/em20.emd`), the room's event scripts (`../event/stage0/r0020107.ecd`, …) and per-enemy motion curves (`../event/motion/em20/em200107.fcv`, …) |
 | 34 | 0x372A10 | texture container used by the geometry (`texCount` images) |
+
+**Section 3 slots.** Each 0xB0-byte slot is a 0x30-byte head, then eight
+`f32×4`:
+
+- The head's first `u32` packs a type byte (`01`, `02`, `03`, `07`), a
+  sub-type byte and flag bytes (`0x11`, `0x21`, `0x91`, `0xA1`, `0xC1`),
+  followed by either a position (`f32 x, y, z`) or small integers (e.g.
+  `01 00 03 00 03 00 …` in slots of sub-type `0x0D`).
+- Vector 0 is a point on a floor (y = the floor height). Vector 1 is a point
+  500 units higher and about 1,000–1,500 units away. Vectors 2–7 are ± unit
+  axes, rotated about Y.
+
+Rendering `r100` with vector 1 as the eye and vector 0 as the target gives
+views pressed against walls, not composed shots, so these are probably not
+fixed cameras. A floor point plus a facing suggests door entry points, with
+the sub-type `0x0D` integers as door links. Fixed cameras are not located
+yet.
+
+## 4d. Room collision (`.fsd` section 9): `PC-verified` (106/106 rooms, 62,614 polygons)
+
+A box tree whose leaves hold the collision polygons. It starts at offset 0 of
+section 9. Other data follows it.
+
+```
+header (16 bytes):
+    u32 topNodeCount
+    u32 polygonCount
+    u32 _ (always 1)
+    u32 _ (always 0)
+node (32 bytes):
+    i32 centre x, y, z        room units
+    i16 halfExtent x, y, z
+    u16 childCount            0 = leaf
+    u32 count                 a leaf: polygons that follow it
+    u32 span                  bytes from this node to the end of its subtree;
+                              0 on a last sibling
+    u32 firstPolygon          a leaf: index of its first polygon
+polygon (48 bytes), right after its leaf:
+    u32 0xFFFFFFFF
+    i16 × 3 × 4               vertices, relative to the leaf's centre
+    u32 flags
+    f32 nx, ny, nz            unit normal
+    f32 _                     usually 0 (non-zero on 6% of polygons)
+```
+
+Top-level nodes follow the header one after another. A node's children, or a
+leaf's polygons, follow the node. Checks that hold in every room: the
+polygon indices form a permutation of `0..polygonCount`, and every non-zero
+span equals the bytes the subtree actually occupies.
+
+A polygon is a quad `(v0, v1, v2, v3)` drawn as triangles `(0, 1, 2)` and
+`(2, 1, 3)`. It is a triangle when `v3 == v2` (about half of them). `(v0, v1,
+v2)` winds counter-clockwise around the stored normal on 62,523 of 62,530
+non-degenerate polygons. 4,262 quads are not planar within 2 units.
+
+Flag bits, compared against the normal (floor `ny > 0.7`, ceiling
+`ny < −0.7`, wall `|ny| < 0.3`):
+
+| Bit | Seen on |
+|---|---|
+| `0x1` | floors only (11,409) |
+| `0x2` | floors (5,737), a few slopes |
+| `0x10` | walls, ceilings, slopes (40,414); almost never floors |
+| `0x40000` | ceilings only (6,825) |
+| `0x1000` | most polygons of every kind (51,950) |
+| others (`0x8`, `0x20`, `0x40`, `0x80`, `0x100`, `0x200`, `0x8000`, `0x10000`, …) | not understood; surface materials or special volumes are likely |
+
+Renders of `r100` (the castle hall) show the walls, pillars, stairs, the
+statue's plinth and the chandeliers' hulls in place over the room geometry.
 
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 
@@ -412,9 +481,9 @@ hitbox, SFX and effect triggers, which Phase 6 will need.
 
 ## 8. Unknown / to discover on PC
 
-Room collision, camera placement, room scripts and triggers and enemy spawn
-tables are not decoded yet; §4c lists the candidate room sections. Track them
-in [`COVERAGE.md`](COVERAGE.md).
+Camera placement, room scripts and triggers, and enemy spawn tables are not
+decoded yet; §4c lists the candidate room sections. Collision is §4d. Track
+them in [`COVERAGE.md`](COVERAGE.md).
 
 ## 9. Packs: `PC-verified` (headers), contents partly known
 

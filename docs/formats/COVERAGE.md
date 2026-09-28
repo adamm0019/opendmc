@@ -46,9 +46,13 @@ the checks named in each row.
 | Room geometry + object placement | `.fsd` section 14 | `dmc_formats::room` | parsed | `dmc room`: 106/106 to glTF; 99.5% of 21,053 objects match their stored bounds; renders of `r002` and `r100` checked by eye (§4b) |
 | Room textures | `.fsd` section 34 (geometry), 17 (unknown use) | `dmc_formats::texture` | parsed | T32 containers; `texIndex` never exceeds section 34's image count |
 | Room vertex colours | `.fsd` section 14 | `dmc_formats::room` | partly understood | channel order and scale unconfirmed (§4b) |
-| Room collision | `.fsd` sections 4, 5? | — | unknown | candidates only (§4c) |
-| Cameras | `.fsd` section 3? | — | unknown | candidate only (§4c) |
-| Triggers / areas | `.fsd` section 9? | — | unknown | candidate only (§4c) |
+| Room collision | `.fsd` section 9 (start) | `dmc_formats::collision` | parsed | 106/106 rooms, 62,614 polygons; counts, index permutation and subtree spans check in every room; `r100` render (§4d) |
+| Collision surface flags | `.fsd` section 9 | `dmc_formats::collision::surface` | partly understood | ground/wall/ceiling bits from normals; the rest unknown (§4d) |
+| Object culling tree | `.fsd` section 9 (after collision) | — | partly understood | 40-byte records repeating the objects' i16 bounds (§4c) |
+| Lighting | `.fsd` sections 4, 5 | — | unknown | float colours and positions in 3,168-byte blocks (§4c) |
+| Door / entry points | `.fsd` section 3? | — | unknown | 63 fixed slots of floor point + facing; not cameras (§4c) |
+| Cameras | ? | — | unknown | not in section 3 (render test, §4c); still to locate |
+| Triggers / areas | ? | — | unknown | not located |
 | Event package (cutscene actors, `.ecd` scripts, `.fcv` curves) | `.fsd` section 30 | — | partly understood | path records read in `r002` (§4c) |
 | Room text | `.fsd` sections 22–29 | — | partly understood | offset/size packs of messages (§4c) |
 | Other room sections (0, 1, 15, 18, 19) | `.fsd` | — | unknown | §4c |

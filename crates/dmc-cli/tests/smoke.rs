@@ -261,7 +261,14 @@ fn pc_room() -> Vec<u8> {
         texture::Kind::T32,
         &[dds::build(4, 4, dds::Format::Dxt1, &[&red])],
     );
-    room::build(&geometry, Some(&textures))
+    let collision = dmc_formats::collision::build(&[dmc_formats::collision::NewLeaf {
+        centre: [5, 0, 0],
+        half_extents: [5, 0, 1],
+        vertices: vec![[-5, 0, -1], [-5, 0, 1], [5, 0, -1], [5, 0, 1]],
+        flags: dmc_formats::collision::surface::GROUND_A,
+        normal: [0.0, 1.0, 0.0],
+    }]);
+    room::build_with(&geometry, Some(&textures), Some(&collision))
 }
 
 #[test]

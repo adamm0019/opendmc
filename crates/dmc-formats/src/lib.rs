@@ -12,6 +12,7 @@
 
 pub mod bdp;
 pub mod bytes;
+pub mod collision;
 pub mod dds;
 pub mod detect;
 pub mod dxt;

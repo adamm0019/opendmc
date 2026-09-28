@@ -129,8 +129,8 @@ container type has a coverage status.
   offsets, `0xCC` padding). Textures are embedded DDS files. Rooms (`.fsd`)
   use their own geometry records. All 73 models and all 106 rooms export
   to glTF (`dmc export`, `dmc room`).
-- Collision, cameras, triggers: candidate sections inside each `.fsd`,
-  not decoded yet. Cutscene/event data: `.fsd` section 30. Audio: FMOD banks.
+- Collision: `.fsd` section 9, parsed for all 106 rooms (`dmc room` writes
+  it beside each room). Cameras and triggers: not located yet. Cutscene/event data: `.fsd` section 30. Audio: FMOD banks.
   Video: WMV.
 
 ### Phase 2: Asset pipeline *(3–6 weeks)*
@@ -141,8 +141,8 @@ container type has a coverage status.
 | Skeletons | geometry section | glTF skin | bone count matches motions; bind pose sane |
 | Motions | motion banks (sections 6/7 players, 3/5 enemies) | glTF animations | 60 fps; root motion distance matches in-game capture |
 | Leg IK | motion channels (target + hinge) | runtime 2-bone IK | feet planted on flat ground in idle/walk |
-| Rooms | `.fsd` + to be discovered | Bevy scene | overlays match screenshots at known camera angles |
-| Collision | **unknown** | trimesh / heightfield | fallback: derive from render mesh + manual volumes |
+| Rooms | `.fsd` section 14 + textures in 34 | glTF / Bevy scene | 106/106 convert; object bounds cross-check; overlays match screenshots at known camera angles |
+| Collision | `.fsd` section 9 (box tree of quads/triangles) | trimesh + surface flags | 106/106 rooms parse; counts and spans self-check; renders match geometry |
 | Cameras | **unknown** | camera zones + rails | fallback: camera authoring tool fitted to screenshots |
 | Audio | **unknown** | decoded PCM streams | play in sync with animation events |
 | Video | **unknown** (FMV) | external decoder or skip | — |
