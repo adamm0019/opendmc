@@ -19,20 +19,24 @@ pub enum Variant {
     /// `0xCC` padding), 24-byte objects, 56-byte mesh descriptors, mesh-major
     /// packing, skeleton offsets relative to the skeleton header.
     Pc64,
+    /// PC room props (`.fsd` section 19): [`Variant::Pc64`] with 80-byte mesh
+    /// descriptors that add a sixth array, 4 bytes of vertex colour per
+    /// vertex (baked lighting, as in the room geometry).
+    Pc64Prop,
 }
 
 impl Variant {
     fn header(self) -> usize {
         match self {
             Variant::Ps3 => 8,
-            Variant::Pc64 => 16,
+            Variant::Pc64 | Variant::Pc64Prop => 16,
         }
     }
 
     fn object_stride(self) -> usize {
         match self {
             Variant::Ps3 => 16,
-            Variant::Pc64 => 24,
+            Variant::Pc64 | Variant::Pc64Prop => 24,
         }
     }
 
@@ -40,13 +44,26 @@ impl Variant {
         match self {
             Variant::Ps3 => 32,
             Variant::Pc64 => 56,
+            Variant::Pc64Prop => 80,
         }
+    }
+
+    /// Per-vertex arrays a mesh descriptor points at.
+    fn arrays(self) -> usize {
+        match self {
+            Variant::Ps3 | Variant::Pc64 => 5,
+            Variant::Pc64Prop => 6,
+        }
+    }
+
+    fn is_pc(self) -> bool {
+        self != Variant::Ps3
     }
 
     fn ptr_size(self) -> usize {
         match self {
             Variant::Ps3 => 4,
-            Variant::Pc64 => 8,
+            Variant::Pc64 | Variant::Pc64Prop => 8,
         }
     }
 
@@ -59,7 +76,7 @@ impl Variant {
     fn ptr(self, r: &Reader, at: usize) -> Result<usize> {
         match self {
             Variant::Ps3 => Ok(r.u32(at)? as usize),
-            Variant::Pc64 => r.offset64(at),
+            Variant::Pc64 | Variant::Pc64Prop => r.offset64(at),
         }
     }
 }
@@ -76,6 +93,9 @@ pub struct Mesh {
     pub weights: Vec<[f32; 3]>,
     /// `true` where the vertex does not close a triangle (strip restart).
     pub strip_break: Vec<bool>,
+    /// Vertex colours as stored ([`Variant::Pc64Prop`] only, else empty);
+    /// channel order and scale unconfirmed, as for rooms.
+    pub colours: Vec<[u8; 4]>,
 }
 
 impl Mesh {
@@ -183,7 +203,7 @@ impl Geometry {
         if object_count == 0 {
             return Err(FormatError::invalid("geometry", "no objects"));
         }
-        if variant == Variant::Pc64 && r.bytes(4, 4)? != [PC_PAD; 4] {
+        if variant.is_pc() && r.bytes(4, 4)? != [PC_PAD; 4] {
             return Err(FormatError::invalid("geometry", "no PC padding in header"));
         }
 
@@ -221,10 +241,7 @@ impl Geometry {
         }
 
         let skeleton = if skel_off != 0 && bone_count > 0 {
-            let base = match variant {
-                Variant::Ps3 => 0,
-                Variant::Pc64 => skel_off,
-            };
+            let base = if variant.is_pc() { skel_off } else { 0 };
             Some(parse_skeleton(&r, skel_off, base, bone_count as usize)?)
         } else {
             None
@@ -244,6 +261,11 @@ fn parse_mesh(r: &Reader, variant: Variant, d: usize) -> Result<Mesh> {
     let tex_index = r.u16(d + 2)?;
     let at = |k: usize| variant.ptr(r, d + variant.ptr_start() + k * variant.ptr_size());
     let (pos, nrm, uv, bone, weight) = (at(0)?, at(1)?, at(2)?, at(3)?, at(4)?);
+    let colour = if variant.arrays() > 5 {
+        Some(at(5)?)
+    } else {
+        None
+    };
     if n < 3 {
         return Err(FormatError::invalid(
             "mesh",
@@ -256,6 +278,9 @@ fn parse_mesh(r: &Reader, variant: Variant, d: usize) -> Result<Mesh> {
     r.bytes(uv, n * 4)?;
     r.bytes(bone, n * 4)?;
     r.bytes(weight, n * 2)?;
+    if let Some(c) = colour {
+        r.bytes(c, n * 4)?;
+    }
 
     let mut m = Mesh {
         tex_index,
@@ -265,6 +290,7 @@ fn parse_mesh(r: &Reader, variant: Variant, d: usize) -> Result<Mesh> {
         joints: Vec::with_capacity(n),
         weights: Vec::with_capacity(n),
         strip_break: Vec::with_capacity(n),
+        colours: Vec::new(),
     };
     for k in 0..n {
         m.positions.push(r.vec3(pos + 12 * k)?);
@@ -277,6 +303,9 @@ fn parse_mesh(r: &Reader, variant: Variant, d: usize) -> Result<Mesh> {
         let word = r.u16(weight + 2 * k)?;
         m.strip_break.push(word & STRIP_BREAK != 0);
         m.weights.push(unpack_weights(word));
+        if let Some(c) = colour {
+            m.colours.push(r.bytes(c + 4 * k, 4)?.try_into().unwrap());
+        }
     }
     Ok(m)
 }
@@ -352,7 +381,7 @@ pub struct NewSkeleton {
 fn set_ptr(w: &mut Writer, variant: Variant, at: usize, v: usize) {
     match variant {
         Variant::Ps3 => w.set_u32(at, v as u32),
-        Variant::Pc64 => w.set_u64(at, v as u64),
+        Variant::Pc64 | Variant::Pc64Prop => w.set_u64(at, v as u64),
     }
 }
 
@@ -360,7 +389,7 @@ fn set_ptr(w: &mut Writer, variant: Variant, at: usize, v: usize) {
 fn record_head(w: &mut Writer, variant: Variant, bytes: &[u8]) {
     let start = w.pos();
     w.bytes(bytes);
-    if variant == Variant::Pc64 {
+    if variant.is_pc() {
         w.bytes(&[PC_PAD; 4]);
     }
     w.zeros(variant.ptr_start() - (w.pos() - start));
@@ -368,7 +397,8 @@ fn record_head(w: &mut Writer, variant: Variant, bytes: &[u8]) {
 
 /// Build a geometry section in the documented layout for `variant`. On PS3
 /// the meshes of an object share attribute-major arrays; on PC each mesh's
-/// arrays are contiguous. Both match the original files.
+/// arrays are contiguous. Both match the original files. Props get a neutral
+/// grey vertex colour.
 pub fn build(
     endian: Endian,
     variant: Variant,
@@ -390,14 +420,16 @@ pub fn build(
     for (oi, meshes) in objects.iter().enumerate() {
         let desc = w.pos();
         w.zeros(meshes.len() * variant.mesh_stride());
-        let mut starts = vec![[0usize; 5]; meshes.len()];
-        let order: Vec<(usize, usize)> = match variant {
-            Variant::Ps3 => (0..5)
+        let arrays = variant.arrays();
+        let mut starts = vec![[0usize; 6]; meshes.len()];
+        let order: Vec<(usize, usize)> = if variant.is_pc() {
+            (0..meshes.len())
+                .flat_map(|mi| (0..arrays).map(move |a| (a, mi)))
+                .collect()
+        } else {
+            (0..arrays)
                 .flat_map(|a| (0..meshes.len()).map(move |mi| (a, mi)))
-                .collect(),
-            Variant::Pc64 => (0..meshes.len())
-                .flat_map(|mi| (0..5).map(move |a| (a, mi)))
-                .collect(),
+                .collect()
         };
         for (a, mi) in order {
             let m = &meshes[mi];
@@ -415,7 +447,8 @@ pub fn build(
                         .u8(m.joints[k][0] << 2)
                         .u8(m.joints[k][1] << 2)
                         .u8(m.joints[k][2] << 2),
-                    _ => w.u16(m.weight_words[k]),
+                    4 => w.u16(m.weight_words[k]),
+                    _ => w.bytes(&[0x80; 4]),
                 };
             }
         }
@@ -434,7 +467,7 @@ pub fn build(
             let mut rec = Writer::new(endian);
             record_head(&mut rec, variant, &head.buf);
             w.buf[d..d + rec.buf.len()].copy_from_slice(&rec.buf);
-            for (k, s) in starts[mi].into_iter().enumerate() {
+            for (k, s) in starts[mi].into_iter().take(arrays).enumerate() {
                 set_ptr(
                     &mut w,
                     variant,
@@ -449,10 +482,7 @@ pub fn build(
         w.pad_to(16, 0);
         let skel = w.pos();
         set_ptr(&mut w, variant, variant.ptr_start(), skel);
-        let base = match variant {
-            Variant::Ps3 => 0,
-            Variant::Pc64 => skel,
-        };
+        let base = if variant.is_pc() { skel } else { 0 };
         w.zeros(16);
         let hier = w.pos();
         w.bytes(&s.parents).pad_to(4, 0);

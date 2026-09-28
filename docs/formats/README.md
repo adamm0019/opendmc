@@ -211,11 +211,12 @@ object[objectCount]   stride 24:
     4 × 0xCC
     u64 meshDescOffset
     8 bytes unknown
-mesh descriptor       stride 56:
+mesh descriptor       stride 56 (room props, §4f: stride 80):
     u16 numVerts, u16 texIndex
     4 × 0xCC
     u64 posOffset, nrmOffset, uvOffset, boneOffset, weightOffset
-    8 bytes unknown
+    8 bytes unknown (props: u64 colourOffset, 4 bytes/vertex,
+                     then 8 zero bytes and 16 filler bytes)
 ```
 
 Two differences beyond widening:
@@ -331,7 +332,8 @@ rooms (62 distinct sets of non-empty sections):
 | 15 | 0x30 | a permutation of 0..0x20 (draw or object order?); always 0x30 |
 | 17 | 0x400C90 | texture container: 8 × 512² DXT5 |
 | 18 | 0x14D0 | offset pack (§9), same shape as `Etc/effcom.anm` |
-| 19 | 0x22F80 | 0 to 11 MB. **Room props**: `u32 count`, `u32 headerSize` (0x80 in `r100`), then 28-byte entries of seven `u32` (two offsets, four −1 slots, a size-like 0x9680; entries with the top bit set, e.g. `0x80000014`, look like references). The payloads start with §4.2 `Pc64` geometry headers (`r100`: 4 props, probably the chandeliers and other movable pieces). Not parsed yet |
+| 19 | 0x22F80 | 0 to 11 MB. **Room props** (§4f) |
+| 21 | — | in 51 rooms: `u32 count`, offsets, then records of keyframed channels (`u32 keys = 2`, `u32 frame = 299`, values). Channel values include 55.0 and 45.0 at the end, so probably **event-camera curves** |
 | 22–29 | ~0x5B0–0xCE0 | offset/size packs (§9) of messages in the same glyph encoding as `.msg`. Probably the room's text in several languages |
 | 30 | 0x206470 | **event package**: a `PLAYER DATA` block, then fixed 64-byte path records naming the enemy models used (`../data/emd/em20.emd`), the room's event scripts (`../event/stage0/r0020107.ecd`, …) and per-enemy motion curves (`../event/motion/em20/em200107.fcv`, …) |
 | 34 | 0x372A10 | texture container used by the geometry (`texCount` images) |
@@ -486,6 +488,64 @@ Still to confirm against the running game:
 - what the eye rail's fourth component, the +0xC0 point, the other type
   bytes and the object flags mean;
 - whether the FOV is vertical or horizontal.
+
+## 4f. Room props (`.fsd` section 19): table `PC-verified`, placement unknown
+
+Parsed by `dmc_formats::props` (`Room::props`). The table walks exactly,
+ending where the first geometry starts, in all 101 rooms that have the
+section: 1,190 props and 8 empty slots.
+
+```
+u32 count
+count slots, back to back:
+    empty slot: one u32 0xFFFFFFFF
+    prop:       u32 geometry offset (section-relative, 16-aligned)
+                u32 field1..field5
+                texture words (see below)
+data (aligned to 16)
+```
+
+**Texture words.** If the first texture word has its top bit set
+(`0x8000_0000 | image`), the prop uses the room's own textures (section 34).
+There is then one word per texture slot, and the count is byte 2 of the
+geometry header: `r100` prop 0 has two slots, `R20 R27`. Otherwise there is
+exactly one word:
+- `0xFFFFFFFF`: no texture;
+- an offset to an embedded `T32` container holding all the prop's images;
+- `0x4000_0000 | offset`: an `ipum` frame sequence (§10), an animated texture.
+
+Across all props: 864 room-image words, 418 embedded containers, 57
+sequences and 81 without a texture.
+
+**Fields 1–5.** Only partly read:
+- Field 1 is −1 or an offset to motion-like data (217 start with a `u32`
+  count of 2).
+- Field 2 is occasionally another offset.
+- Field 3 is always −1.
+- Field 4 is a second geometry in 30 props.
+- Field 5 holds references (top bit set) or small records.
+
+**Geometry.** The §4.2 records, except that mesh descriptors are 80 bytes,
+not 56. They add a sixth array of 4 bytes per vertex, which by size and
+position matches the room meshes' vertex colours. Every one of the 1,175
+multi-mesh prop objects walks correctly only with the 80-byte stride.
+`geometry::Variant::Pc64Prop` reads this layout, and all 1,190 geometries
+parse. 1,184 have unit normals; the other six are copies of one 112-vertex
+model in `r408`/`r40b`. Renders of `r100`'s props (a carved stone block on
+room images 20 and 27; three copies of a 17-bone model with an embedded
+texture) show coherent shapes and textures.
+
+**Placement is not in this section.** Every prop is modelled around its own
+origin (bone 0 at 0,0,0). Several sets of copies share one geometry and
+differ only in their texture or motion field (`r100` props 1–3, `r104`
+props 3–7). The candidates checked do not hold transforms:
+- section 3 is door and trigger records;
+- section 21 is keyframed curves;
+- sections 0 and 1 are small fixed parameter blocks.
+
+Placement may come from the motion data or from per-room code. Until it is
+found, `dmc room` writes each room's props side by side in
+`<room>.props.glb`, for inspection.
 
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 

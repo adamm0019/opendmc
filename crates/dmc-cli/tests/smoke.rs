@@ -275,10 +275,33 @@ fn pc_room() -> Vec<u8> {
         eye: [5., 2000., -1500.],
         rails: vec![],
     }]);
+    // One prop on the room's image 0, after an empty slot.
+    let prop = geometry::build(
+        Endian::Little,
+        geometry::Variant::Pc64Prop,
+        1,
+        &[vec![NewMesh {
+            tex_index: 0,
+            positions: vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]],
+            normals: vec![[0., 0., 1.]; 4],
+            uvs: vec![[0., 0.]; 4],
+            joints: vec![[0, 0, 0]; 4],
+            weight_words: vec![STRIP_BREAK, STRIP_BREAK, 0, 0],
+        }]],
+        None,
+    );
+    let props = dmc_formats::props::build(&[
+        None,
+        Some(dmc_formats::props::NewProp {
+            geometry: prop,
+            room_textures: vec![0],
+        }),
+    ]);
     room::build_sections(&[
         (dmc_formats::camera::SECTION, Some(&cameras)),
         (dmc_formats::collision::SECTION, Some(&collision)),
         (room::GEOMETRY_SECTION, Some(&geometry)),
+        (dmc_formats::props::SECTION, Some(&props)),
         (room::TEXTURE_SECTION, Some(&textures)),
     ])
 }
@@ -313,7 +336,7 @@ fn pc_room_pipeline() {
     let one = root.join("one.glb");
     let out = dmc(&["room", &spec, s(&one)]);
     assert!(
-        out.contains("objects=  2") && out.contains("bounds=2/2"),
+        out.contains("objects=  2") && out.contains("bounds=2/2") && out.contains("props= 1"),
         "{out}"
     );
 
@@ -327,5 +350,15 @@ fn pc_room_pipeline() {
     assert_eq!(images.len(), 1);
     let (t, _, _) = doc.nodes().nth(1).unwrap().transform().decomposed();
     assert_eq!(t, [10.0, 0.0, 0.0]);
+    let (props, _, images) =
+        gltf::import(root.join("rooms/Fsd/r002.props.glb")).expect("valid glTF");
+    assert_eq!(
+        props
+            .nodes()
+            .map(|n| n.name().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        ["prop01"]
+    );
+    assert_eq!(images.len(), 1, "the prop uses the room's image");
     let _ = fs::remove_dir_all(&root);
 }

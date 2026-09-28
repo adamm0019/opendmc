@@ -22,6 +22,7 @@ pub mod geometry;
 pub mod ik;
 pub mod model;
 pub mod motion;
+pub mod props;
 pub mod room;
 pub mod texture;
 
