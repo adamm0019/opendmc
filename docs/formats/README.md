@@ -228,15 +228,21 @@ Two differences beyond widening:
 Per-vertex encodings (positions, normals, UVs, bone bytes, weight words) are
 unchanged.
 
-## 4b. Room geometry (`.fsd` section 14): `PC-verified` (106/106 rooms parse; totals match)
+## 4b. Room geometry (`.fsd` section 14): `PC-verified`
 
 Rooms use their own records, unlike §4. Offsets are relative to the section.
+`dmc room` converts all 106 rooms (21,053 objects, 3.2 M vertices, 2.0 M
+triangles); renders of `r002` (Dante's office) and `r100` (the castle hall)
+match the game, with backface culling on, which confirms the up axis (+Y) and
+the winding rule below.
 
 ```
 header (16 bytes):
-    u8 objectCount, u8 _ (always 1), u8 texCount, u8 _
+    u16 objectCount          (16-bit: 29 rooms have more than 255 objects)
+    u8  texCount             (images in section 34)
+    u8  _
     4 × 0xCC
-    u64 matrixTableOffset     (see below)
+    u64 matrixOffset         (objectCount 4×4 matrices, one per object)
 object[objectCount]   stride 40:
     u8  meshCount
     u8  0
@@ -244,13 +250,24 @@ object[objectCount]   stride 40:
     4 × 0xCC
     u64 firstMeshOffset
     8 bytes flags            (unknown; e.g. 00 20 04 00 00 06 00 00)
-    i16 × 6                  (unknown; probably a bounding box)
+    i16 × 6                  world bounds: x max, x min, y max, y min, z max, z min
     4 × 0xCD
 ```
 
-Meshes of an object form a **chain**: each mesh is a 32-byte descriptor
-followed by its own vertex arrays, and the next mesh starts where this one
-ends.
+The object table ends where the first mesh begins.
+
+**Placement.** Vertices are in object space. Object *i* is placed by matrix
+*i* at `matrixOffset + 64·i`: 16 `f32`, row-major, `world = M · [x, y, z, 1]`
+(translation in the last column, bottom row `0 0 0 1`). The stored bounds
+check this: for 99.5% of objects, the transformed vertices span exactly the
+stored bounds (±2 units). The bounds are `i16` and wrap in the large rooms
+(coordinates reach about ±50,000), so they compare modulo 65,536. The other
+0.5% (102 objects, about half of them in `r10c`, `r30a`, `r408` and `r40d`)
+disagree for a reason not known yet.
+
+Meshes of an object form a **chain**: each mesh is a 32-byte descriptor,
+16-byte aligned, followed by its own vertex arrays, and the next mesh starts
+where this one ends.
 
 ```
 mesh descriptor (32 bytes), fields in 16-byte units from the descriptor:
@@ -263,7 +280,7 @@ mesh descriptor (32 bytes), fields in 16-byte units from the descriptor:
     u16 _                    (always 0)
     u16 nextAt               (the next mesh, or the end of the chain)
     8 × 0x00, 8 × 0xCD
-arrays:
+arrays (each padded to 16 with 0xCD):
     pos    f32×3 per vertex
     nrm    f32×3 per vertex
     uv     i16×2 per vertex, /4096 (as §4)
@@ -282,14 +299,15 @@ The first byte of each colour entry drives the triangle strip:
 Checked on 30 rooms (5,645 meshes): the first two vertices of every mesh have
 bit 1 set, and the winding bit agrees with the vertex normals on 99.4% of 450k
 triangles. The rest are probably curved surfaces, where the smoothed normals
-disagree with the flat face. The other
-three colour bytes are equal on the vertices checked so far (grey vertex
-lighting), so their channel order is not known yet.
+disagree with the flat face.
 
-The header's second byte is 1 in every room, and `matrixTableOffset` points
-to 4×4 float matrices (rows `[1,0,0,tx] [0,1,0,ty] [0,0,1,tz] [0,0,0,1]` in
-`r002`), not to a §5 skeleton. What they place is not known yet.
-*(speculative)*
+The three colour bytes are vertex lighting. About a third of meshes are
+grey; the rest are coloured, and the first byte runs lower than the other
+two, but the channel order and scale (values reach 255) are not confirmed.
+`dmc room` exports them as-is, divided by 255.
+
+Normals are unit length except in `r40b`, where they are scaled by about
+1.8·10⁻⁵ (directions intact), and in `r305`, which has 4 NaN normals.
 
 ## 4c. Other room sections: `speculative`
 

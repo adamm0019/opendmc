@@ -42,8 +42,9 @@ the checks named in each row.
 
 | Type | Where (PC) | Parser | Status | Evidence |
 |---|---|---|---|---|
-| Room geometry | `.fsd` section 14 | — (Python prototype, parser in progress) | partly understood | 106/106: objects, mesh chains and vertex totals consistent (§4b) |
-| Room textures | `.fsd` sections 17, 34 | `dmc_formats::texture` | parsed | T32 containers, found by `dmc info` |
+| Room geometry + object placement | `.fsd` section 14 | `dmc_formats::room` | parsed | `dmc room`: 106/106 to glTF; 99.5% of 21,053 objects match their stored bounds; renders of `r002` and `r100` checked by eye (§4b) |
+| Room textures | `.fsd` section 34 (geometry), 17 (unknown use) | `dmc_formats::texture` | parsed | T32 containers; `texIndex` never exceeds section 34's image count |
+| Room vertex colours | `.fsd` section 14 | `dmc_formats::room` | partly understood | channel order and scale unconfirmed (§4b) |
 | Room collision | `.fsd` sections 4, 5? | — | unknown | candidates only (§4c) |
 | Cameras | `.fsd` section 3? | — | unknown | candidate only (§4c) |
 | Triggers / areas | `.fsd` section 9? | — | unknown | candidate only (§4c) |

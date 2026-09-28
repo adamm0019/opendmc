@@ -127,8 +127,8 @@ container type has a coverage status.
   as on PS3, so they can't signal byte order.
 - Layouts: the same records as the PS3 notes, widened for 64-bit (u64
   offsets, `0xCC` padding). Textures are embedded DDS files. Rooms (`.fsd`)
-  use their own geometry records. All 73 models export; room geometry is
-  mapped for all 106 rooms.
+  use their own geometry records. All 73 models and all 106 rooms export
+  to glTF (`dmc export`, `dmc room`).
 - Collision, cameras, triggers: candidate sections inside each `.fsd`,
   not decoded yet. Cutscene/event data: `.fsd` section 30. Audio: FMOD banks.
   Video: WMV.

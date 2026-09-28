@@ -4,6 +4,7 @@
 use crate::bdp;
 use crate::bytes::Endian;
 use crate::model::ModelFile;
+use crate::room::Room;
 use crate::texture;
 use serde::Serialize;
 
@@ -23,6 +24,12 @@ pub enum Kind {
         meshes: usize,
         vertices: usize,
         bones: u8,
+        textures: usize,
+    },
+    Room {
+        objects: usize,
+        meshes: usize,
+        vertices: usize,
         textures: usize,
     },
     Known {
@@ -83,6 +90,14 @@ pub fn classify(data: &[u8]) -> Kind {
         if data.starts_with(magic) {
             return Kind::Known { name };
         }
+    }
+    if let Ok(room) = Room::parse(data) {
+        return Kind::Room {
+            objects: room.geometry.objects.len(),
+            meshes: room.geometry.mesh_count(),
+            vertices: room.geometry.vertex_count(),
+            textures: room.textures(data).map_or(0, |(_, set)| set.images.len()),
+        };
     }
     if let Ok((m, g)) = ModelFile::detect(data) {
         return Kind::Model {
