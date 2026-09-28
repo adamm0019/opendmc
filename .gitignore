@@ -25,3 +25,10 @@
 *.usm
 # Inventory JSON can list file hashes; the Markdown summary is what we commit.
 inventory.json
+
+# Local inventory runs (the committed summary goes to docs/inventory/).
+/my-inventory/
+*.nbz
+*.bank
+*.ip2
+*.itm

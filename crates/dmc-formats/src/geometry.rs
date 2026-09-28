@@ -5,10 +5,64 @@ use crate::bytes::{Endian, Reader, Writer};
 use crate::error::{FormatError, Result};
 use serde::Serialize;
 
-const HEADER: usize = 8;
-const OBJECT_STRIDE: usize = 16;
-const MESH_STRIDE: usize = 32;
 pub const STRIP_BREAK: u16 = 0x8000;
+/// Alignment filler in the PC build's widened records.
+pub const PC_PAD: u8 = 0xCC;
+
+/// Record layout of the geometry section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub enum Variant {
+    /// PS3 notes: 32-bit offsets, 16-byte objects, 32-byte mesh descriptors,
+    /// attribute-major packing, skeleton offsets relative to the section.
+    Ps3,
+    /// PC build: the same records widened for 64-bit (u64 offsets with
+    /// `0xCC` padding), 24-byte objects, 56-byte mesh descriptors, mesh-major
+    /// packing, skeleton offsets relative to the skeleton header.
+    Pc64,
+}
+
+impl Variant {
+    fn header(self) -> usize {
+        match self {
+            Variant::Ps3 => 8,
+            Variant::Pc64 => 16,
+        }
+    }
+
+    fn object_stride(self) -> usize {
+        match self {
+            Variant::Ps3 => 16,
+            Variant::Pc64 => 24,
+        }
+    }
+
+    fn mesh_stride(self) -> usize {
+        match self {
+            Variant::Ps3 => 32,
+            Variant::Pc64 => 56,
+        }
+    }
+
+    fn ptr_size(self) -> usize {
+        match self {
+            Variant::Ps3 => 4,
+            Variant::Pc64 => 8,
+        }
+    }
+
+    /// Where the first offset of a record sits (after the small fields and,
+    /// on PC, the 4 padding bytes).
+    fn ptr_start(self) -> usize {
+        self.ptr_size()
+    }
+
+    fn ptr(self, r: &Reader, at: usize) -> Result<usize> {
+        match self {
+            Variant::Ps3 => Ok(r.u32(at)? as usize),
+            Variant::Pc64 => r.offset64(at),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Mesh {
@@ -99,6 +153,7 @@ impl Skeleton {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Geometry {
+    pub variant: Variant,
     pub bone_count: u8,
     pub tex_count: u8,
     pub objects: Vec<Object>,
@@ -119,25 +174,38 @@ impl Geometry {
     }
 
     /// Parse a geometry section; `section` starts at the section base.
-    pub fn parse(section: &[u8], endian: Endian) -> Result<Self> {
+    pub fn parse(section: &[u8], endian: Endian, variant: Variant) -> Result<Self> {
         let r = Reader::new(section, endian);
         let object_count = r.u8(0)? as usize;
         let bone_count = r.u8(1)?;
         let tex_count = r.u8(2)?;
-        let skel_off = r.u32(4)? as usize;
+        let skel_off = variant.ptr(&r, variant.ptr_start())?;
         if object_count == 0 {
             return Err(FormatError::invalid("geometry", "no objects"));
+        }
+        if variant == Variant::Pc64 && r.bytes(4, 4)? != [PC_PAD; 4] {
+            return Err(FormatError::invalid("geometry", "no PC padding in header"));
         }
 
         let mut objects = Vec::with_capacity(object_count);
         for oi in 0..object_count {
-            let o = HEADER + oi * OBJECT_STRIDE;
+            let o = variant.header() + oi * variant.object_stride();
             let mesh_count = r.u8(o)? as usize;
             let total_verts = r.u16(o + 2)?;
-            let desc_off = r.u32(o + 4)? as usize;
+            let desc_off = variant.ptr(&r, o + variant.ptr_start())?;
+            if mesh_count == 0 {
+                return Err(FormatError::invalid(
+                    "geometry",
+                    format!("object {oi} has no meshes"),
+                ));
+            }
             let mut meshes = Vec::with_capacity(mesh_count);
             for mi in 0..mesh_count {
-                meshes.push(parse_mesh(&r, desc_off + mi * MESH_STRIDE)?);
+                meshes.push(parse_mesh(
+                    &r,
+                    variant,
+                    desc_off + mi * variant.mesh_stride(),
+                )?);
             }
             let sum: usize = meshes.iter().map(Mesh::vertex_count).sum();
             if sum != total_verts as usize {
@@ -153,11 +221,16 @@ impl Geometry {
         }
 
         let skeleton = if skel_off != 0 && bone_count > 0 {
-            Some(parse_skeleton(&r, skel_off, bone_count as usize)?)
+            let base = match variant {
+                Variant::Ps3 => 0,
+                Variant::Pc64 => skel_off,
+            };
+            Some(parse_skeleton(&r, skel_off, base, bone_count as usize)?)
         } else {
             None
         };
         Ok(Geometry {
+            variant,
             bone_count,
             tex_count,
             objects,
@@ -166,11 +239,11 @@ impl Geometry {
     }
 }
 
-fn parse_mesh(r: &Reader, d: usize) -> Result<Mesh> {
+fn parse_mesh(r: &Reader, variant: Variant, d: usize) -> Result<Mesh> {
     let n = r.u16(d)? as usize;
     let tex_index = r.u16(d + 2)?;
-    let [pos, nrm, uv, bone, weight] = [4, 8, 12, 16, 20].map(|k| r.u32(d + k).map(|v| v as usize));
-    let (pos, nrm, uv, bone, weight) = (pos?, nrm?, uv?, bone?, weight?);
+    let at = |k: usize| variant.ptr(r, d + variant.ptr_start() + k * variant.ptr_size());
+    let (pos, nrm, uv, bone, weight) = (at(0)?, at(1)?, at(2)?, at(3)?, at(4)?);
     if n < 3 {
         return Err(FormatError::invalid(
             "mesh",
@@ -218,10 +291,14 @@ pub fn unpack_weights(word: u16) -> [f32; 3] {
     w.map(|x| x as f32 / total as f32)
 }
 
-fn parse_skeleton(r: &Reader, off: usize, bone_count: usize) -> Result<Skeleton> {
-    let hier = r.u32(off)? as usize;
-    let flags = r.u32(off + 4)? as usize;
-    let xforms = r.u32(off + 8)? as usize;
+/// The skeleton header keeps 32-bit offsets on both builds; they count from
+/// `base` (the section on PS3, the skeleton header on PC).
+fn parse_skeleton(r: &Reader, off: usize, base: usize, bone_count: usize) -> Result<Skeleton> {
+    let rel = |k: usize| -> Result<usize> {
+        let v = r.u32(off + k)? as usize;
+        Ok(if v == 0 { 0 } else { base + v })
+    };
+    let (hier, flags, xforms) = (rel(0)?, rel(4)?, rel(8)?);
     let count = r.u32(off + 12)? as usize;
     if count != bone_count {
         return Err(FormatError::invalid(
@@ -271,76 +348,111 @@ pub struct NewSkeleton {
     pub offsets: Vec<[f32; 3]>,
 }
 
-/// Build a geometry section in the documented layout. Meshes of an object
-/// share packed attribute arrays, as in the original files.
+/// Write an offset of the variant's width at `at`.
+fn set_ptr(w: &mut Writer, variant: Variant, at: usize, v: usize) {
+    match variant {
+        Variant::Ps3 => w.set_u32(at, v as u32),
+        Variant::Pc64 => w.set_u64(at, v as u64),
+    }
+}
+
+/// The small fields of a record, then (PC) the padding before its offsets.
+fn record_head(w: &mut Writer, variant: Variant, bytes: &[u8]) {
+    let start = w.pos();
+    w.bytes(bytes);
+    if variant == Variant::Pc64 {
+        w.bytes(&[PC_PAD; 4]);
+    }
+    w.zeros(variant.ptr_start() - (w.pos() - start));
+}
+
+/// Build a geometry section in the documented layout for `variant`. On PS3
+/// the meshes of an object share attribute-major arrays; on PC each mesh's
+/// arrays are contiguous. Both match the original files.
 pub fn build(
     endian: Endian,
+    variant: Variant,
     tex_count: u8,
     objects: &[Vec<NewMesh>],
     skeleton: Option<&NewSkeleton>,
 ) -> Vec<u8> {
     let mut w = Writer::new(endian);
     let bone_count = skeleton.map_or(0, |s| s.parents.len());
-    w.u8(objects.len() as u8)
-        .u8(bone_count as u8)
-        .u8(tex_count)
-        .u8(0)
-        .u32(0);
+    record_head(
+        &mut w,
+        variant,
+        &[objects.len() as u8, bone_count as u8, tex_count, 0],
+    );
+    w.zeros(variant.ptr_size());
     let obj_table = w.pos();
-    w.zeros(objects.len() * OBJECT_STRIDE);
+    w.zeros(objects.len() * variant.object_stride());
 
     for (oi, meshes) in objects.iter().enumerate() {
         let desc = w.pos();
-        w.zeros(meshes.len() * MESH_STRIDE);
-        // Attribute-major packing: every mesh's positions, then every mesh's
-        // normals, and so on.
+        w.zeros(meshes.len() * variant.mesh_stride());
         let mut starts = vec![[0usize; 5]; meshes.len()];
-        #[allow(clippy::needless_range_loop)] // `a` selects the attribute, not just an index
-        for a in 0..5 {
-            for (mi, m) in meshes.iter().enumerate() {
-                w.pad_to(4, 0xCD);
-                starts[mi][a] = w.pos();
-                for k in 0..m.positions.len() {
-                    match a {
-                        0 => w.vec3(m.positions[k]),
-                        1 => w.vec3(m.normals[k]),
-                        2 => w
-                            .i16((m.uvs[k][0] * 4096.0) as i16)
-                            .i16(((1.0 - m.uvs[k][1]) * 4096.0) as i16),
-                        3 => w
-                            .u8(0)
-                            .u8(m.joints[k][0] << 2)
-                            .u8(m.joints[k][1] << 2)
-                            .u8(m.joints[k][2] << 2),
-                        _ => w.u16(m.weight_words[k]),
-                    };
-                }
+        let order: Vec<(usize, usize)> = match variant {
+            Variant::Ps3 => (0..5)
+                .flat_map(|a| (0..meshes.len()).map(move |mi| (a, mi)))
+                .collect(),
+            Variant::Pc64 => (0..meshes.len())
+                .flat_map(|mi| (0..5).map(move |a| (a, mi)))
+                .collect(),
+        };
+        for (a, mi) in order {
+            let m = &meshes[mi];
+            w.pad_to(16, 0xCD);
+            starts[mi][a] = w.pos();
+            for k in 0..m.positions.len() {
+                match a {
+                    0 => w.vec3(m.positions[k]),
+                    1 => w.vec3(m.normals[k]),
+                    2 => w
+                        .i16((m.uvs[k][0] * 4096.0) as i16)
+                        .i16(((1.0 - m.uvs[k][1]) * 4096.0) as i16),
+                    3 => w
+                        .u8(0)
+                        .u8(m.joints[k][0] << 2)
+                        .u8(m.joints[k][1] << 2)
+                        .u8(m.joints[k][2] << 2),
+                    _ => w.u16(m.weight_words[k]),
+                };
             }
         }
         let total: usize = meshes.iter().map(|m| m.positions.len()).sum();
-        let rec = obj_table + oi * OBJECT_STRIDE;
-        w.buf[rec] = meshes.len() as u8;
-        let tv = match endian {
-            Endian::Big => (total as u16).to_be_bytes(),
-            Endian::Little => (total as u16).to_le_bytes(),
-        };
-        w.buf[rec + 2..rec + 4].copy_from_slice(&tv);
-        w.set_u32(rec + 4, desc as u32);
+        let rec = obj_table + oi * variant.object_stride();
+        let mut head = Writer::new(endian);
+        head.u8(meshes.len() as u8).u8(0).u16(total as u16);
+        let mut obj = Writer::new(endian);
+        record_head(&mut obj, variant, &head.buf);
+        w.buf[rec..rec + obj.buf.len()].copy_from_slice(&obj.buf);
+        set_ptr(&mut w, variant, rec + variant.ptr_start(), desc);
         for (mi, m) in meshes.iter().enumerate() {
-            let d = desc + mi * MESH_STRIDE;
+            let d = desc + mi * variant.mesh_stride();
             let mut head = Writer::new(endian);
             head.u16(m.positions.len() as u16).u16(m.tex_index);
-            for s in starts[mi] {
-                head.u32(s as u32);
+            let mut rec = Writer::new(endian);
+            record_head(&mut rec, variant, &head.buf);
+            w.buf[d..d + rec.buf.len()].copy_from_slice(&rec.buf);
+            for (k, s) in starts[mi].into_iter().enumerate() {
+                set_ptr(
+                    &mut w,
+                    variant,
+                    d + variant.ptr_start() + k * variant.ptr_size(),
+                    s,
+                );
             }
-            w.buf[d..d + head.buf.len()].copy_from_slice(&head.buf);
         }
     }
 
     if let Some(s) = skeleton {
         w.pad_to(16, 0);
         let skel = w.pos();
-        w.set_u32(4, skel as u32);
+        set_ptr(&mut w, variant, variant.ptr_start(), skel);
+        let base = match variant {
+            Variant::Ps3 => 0,
+            Variant::Pc64 => skel,
+        };
         w.zeros(16);
         let hier = w.pos();
         w.bytes(&s.parents).pad_to(4, 0);
@@ -350,7 +462,10 @@ pub fn build(
         for o in &s.offsets {
             w.vec3(*o).f32(dot(*o, *o).sqrt());
         }
-        for (i, v) in [hier, flags, xf, s.parents.len()].into_iter().enumerate() {
+        for (i, v) in [hier - base, flags - base, xf - base, s.parents.len()]
+            .into_iter()
+            .enumerate()
+        {
             w.set_u32(skel + 4 * i, v as u32);
         }
     }
@@ -410,10 +525,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn round_trip_both_orders() {
-        for e in [Endian::Big, Endian::Little] {
-            let bytes = build(e, 2, &[quad_object()], Some(&two_bone_skeleton()));
-            let g = Geometry::parse(&bytes, e).unwrap();
+    fn round_trip_both_orders_and_variants() {
+        for (e, v) in [
+            (Endian::Big, Variant::Ps3),
+            (Endian::Little, Variant::Ps3),
+            (Endian::Little, Variant::Pc64),
+        ] {
+            let bytes = build(e, v, 2, &[quad_object()], Some(&two_bone_skeleton()));
+            let g = Geometry::parse(&bytes, e, v).unwrap();
+            assert_eq!(g.variant, v);
             assert_eq!(g.objects.len(), 1);
             assert_eq!(g.mesh_count(), 2);
             assert_eq!(g.vertex_count(), 7);
@@ -444,16 +564,34 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn wrong_byte_order_fails_cleanly() {
-        let bytes = build(Endian::Big, 1, &[quad_object()], None);
-        assert!(Geometry::parse(&bytes, Endian::Little).is_err());
+    fn wrong_byte_order_or_variant_fails_cleanly() {
+        let bytes = build(Endian::Big, Variant::Ps3, 1, &[quad_object()], None);
+        assert!(Geometry::parse(&bytes, Endian::Little, Variant::Ps3).is_err());
+        let pc = build(Endian::Little, Variant::Pc64, 1, &[quad_object()], None);
+        assert!(Geometry::parse(&pc, Endian::Little, Variant::Ps3).is_err());
+        assert!(Geometry::parse(&bytes, Endian::Big, Variant::Pc64).is_err());
+    }
+
+    #[test]
+    fn pc_records_are_padded_and_widened() {
+        let bytes = build(Endian::Little, Variant::Pc64, 1, &[quad_object()], None);
+        assert_eq!(&bytes[4..8], &[PC_PAD; 4]);
+        // First object record: mesh count, 0, total vertices, padding, u64 offset.
+        assert_eq!(
+            &bytes[16..24],
+            &[2, 0, 7, 0, PC_PAD, PC_PAD, PC_PAD, PC_PAD]
+        );
+        let desc = u64::from_le_bytes(bytes[24..32].try_into().unwrap()) as usize;
+        assert_eq!(desc, 16 + 24);
     }
 
     #[test]
     fn truncation_fails_cleanly() {
-        let bytes = build(Endian::Big, 1, &[quad_object()], Some(&two_bone_skeleton()));
-        for cut in (0..bytes.len()).step_by(7) {
-            let _ = Geometry::parse(&bytes[..cut], Endian::Big);
+        for (e, v) in [(Endian::Big, Variant::Ps3), (Endian::Little, Variant::Pc64)] {
+            let bytes = build(e, v, 1, &[quad_object()], Some(&two_bone_skeleton()));
+            for cut in (0..bytes.len()).step_by(7) {
+                let _ = Geometry::parse(&bytes[..cut], e, v);
+            }
         }
     }
 }

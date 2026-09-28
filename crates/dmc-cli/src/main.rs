@@ -1,6 +1,7 @@
 //! `dmc`: tooling that runs against *your own* install. Nothing it produces
 //! may be committed except `inventory.md` (see DECISIONS.md).
 
+mod archive;
 mod export;
 mod gltf;
 mod inventory;
@@ -50,13 +51,16 @@ enum Cmd {
         pattern: Option<String>,
     },
     /// Describe one file: sections, geometry, textures, motion banks.
+    /// Files inside an archive are named `archive.nbz::Dir/name.ext`.
     Info { file: PathBuf },
     /// Decode every embedded texture container to PNG.
     Tex { file: PathBuf, out: PathBuf },
     /// Convert a model file to glTF binary (.glb), textured and skinned.
     Model { file: PathBuf, out: PathBuf },
-    /// Batch-convert every model under a directory, with validation stats.
+    /// Batch-convert every model under a directory or inside an `.nbz`
+    /// archive, with validation stats.
     Export {
+        /// A directory or an `.nbz` archive.
         dir: PathBuf,
         out: PathBuf,
         #[arg(long)]
@@ -75,12 +79,16 @@ fn main() -> Result<()> {
         } => bundle_extract(&bundle, &out, pattern.as_deref()),
         Cmd::Info { file } => info(&file),
         Cmd::Tex { file, out } => {
-            let n = export::textures_to_png(&read(&file)?, &out, &stem(&file))?;
+            let n = export::textures_to_png(
+                &archive::read_spec(&file)?,
+                &out,
+                &archive::spec_stem(&file),
+            )?;
             println!("{n} images -> {}", out.display());
             Ok(())
         }
         Cmd::Model { file, out } => {
-            let stats = export::model_to_glb(&read(&file)?, &out)?;
+            let stats = export::model_to_glb(&archive::read_spec(&file)?, &out)?;
             println!("{}  {stats}", out.display());
             Ok(())
         }
@@ -90,12 +98,6 @@ fn main() -> Result<()> {
 
 pub fn read(p: &Path) -> Result<Vec<u8>> {
     fs::read(p).with_context(|| format!("reading {}", p.display()))
-}
-
-pub fn stem(p: &Path) -> String {
-    p.file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".into())
 }
 
 fn matches(pattern: Option<&str>, path: &str) -> bool {
@@ -171,7 +173,7 @@ fn bundle_extract(path: &Path, out: &Path, pattern: Option<&str>) -> Result<()> 
 }
 
 fn info(path: &Path) -> Result<()> {
-    let data = read(path)?;
+    let data = archive::read_spec(path)?;
     println!(
         "{}  {} bytes  entropy {:.2}",
         path.display(),

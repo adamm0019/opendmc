@@ -3,8 +3,8 @@
 //!
 //! Every reader works on a byte slice supplied by the caller, checks every
 //! access against its bounds, and takes the file's byte order at runtime:
-//! the PS3 build is big-endian, and the PC build's order is still to be
-//! confirmed (see `docs/formats/README.md`).
+//! the PS3 build is big-endian and the PC build little-endian, with some
+//! records widened for 64-bit (see `docs/formats/README.md`).
 //!
 //! Each format module also has a writer. The writers produce the synthetic
 //! fixtures used in tests (no game data is ever checked in), and they are the
@@ -12,6 +12,7 @@
 
 pub mod bdp;
 pub mod bytes;
+pub mod dds;
 pub mod detect;
 pub mod dxt;
 pub mod error;

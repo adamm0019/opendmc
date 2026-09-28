@@ -19,7 +19,7 @@ fn model(e: Endian) -> Vec<u8> {
         joints: vec![[0, 0, 0]; 4],
         weight_words: vec![STRIP_BREAK, STRIP_BREAK, 0, 0],
     };
-    let geo = geometry::build(e, 1, &[vec![mesh]], None);
+    let geo = geometry::build(e, geometry::Variant::Ps3, 1, &[vec![mesh]], None);
     let px = [0x00, 0xF8, 0, 0, 0, 0, 0, 0];
     let tex = texture::build(
         texture::Kind::T32,
@@ -59,6 +59,100 @@ fn dmc(args: &[&str]) -> String {
 
 fn s(p: &Path) -> &str {
     p.to_str().unwrap()
+}
+
+/// A PC-layout model: counted section table, widened geometry, and a texture
+/// container with the fixed magic bytes in front of little-endian fields.
+fn pc_model() -> Vec<u8> {
+    let e = Endian::Little;
+    let mesh = NewMesh {
+        tex_index: 0,
+        positions: vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]],
+        normals: vec![[0., 0., 1.]; 4],
+        uvs: vec![[0., 0.]; 4],
+        joints: vec![[0, 0, 0]; 4],
+        weight_words: vec![STRIP_BREAK, STRIP_BREAK, 0, 0],
+    };
+    let geo = geometry::build(e, geometry::Variant::Pc64, 1, &[vec![mesh]], None);
+    let px = [0x00, 0xF8, 0, 0, 0, 0, 0, 0];
+    let tex = texture::build(
+        texture::Kind::T32,
+        e,
+        &[texture::NewImage {
+            format_code: 6,
+            width: 4,
+            height: 4,
+            pixels: &px,
+        }],
+    );
+    let mut w = Writer::new(e);
+    let s1 = 16 + geo.len().next_multiple_of(16);
+    w.u32(2)
+        .u32(16)
+        .u32(s1 as u32)
+        .u32(0)
+        .bytes(&geo)
+        .pad_to(16, 0)
+        .bytes(&tex);
+    w.finish()
+}
+
+fn write_nbz(path: &Path, files: &[(&str, Vec<u8>)]) {
+    use std::io::Write;
+    let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, data) in files {
+        z.start_file(*name, opts).unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+#[test]
+fn pc_archive_pipeline() {
+    let root = std::env::temp_dir().join(format!("opendmc-smoke-pc-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let install = root.join("install/data/dmc1");
+    fs::create_dir_all(&install).unwrap();
+    let nbz = install.join("dmc1-0.nbz");
+    write_nbz(
+        &nbz,
+        &[
+            ("Pld/pl00.pld", pc_model()),
+            ("Emd/em00.emd", pc_model()),
+            ("Etc/mystery.dat", vec![7; 64]),
+        ],
+    );
+
+    let reports = root.join("reports");
+    dmc(&["inventory", s(&root.join("install")), "--out", s(&reports)]);
+    let md = fs::read_to_string(reports.join("inventory.md")).unwrap();
+    assert!(
+        md.contains("ZIP archives (`.nbz`): **1** holding **3** entries"),
+        "{md}"
+    );
+    assert!(md.contains("Files parsed as DMC1 models: **2**"), "{md}");
+    assert!(md.contains("models: Little ×2"), "{md}");
+    assert!(md.contains("Counted ×2"), "{md}");
+    assert!(md.contains("dmc1-0.nbz::Etc/mystery.dat"), "{md}");
+
+    let spec = format!("{}::Pld/pl00.pld", nbz.display());
+    let info = dmc(&["info", &spec]);
+    assert!(info.contains("model: Little Counted"), "{info}");
+    assert!(
+        info.contains("geometry: 1 objects, 1 meshes, 4 vertices"),
+        "{info}"
+    );
+    assert!(info.contains("T32 Little, 1 images"), "{info}");
+
+    let export = dmc(&["export", s(&nbz), s(&root.join("export"))]);
+    assert!(
+        export.contains("2 converted (0 flagged for review), 0 failed"),
+        "{export}"
+    );
+    gltf::import(root.join("export/Pld/pl00.glb")).expect("valid glTF");
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

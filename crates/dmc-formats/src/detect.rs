@@ -35,6 +35,8 @@ const SIMPLE_MAGICS: &[(&[u8], &str)] = &[
     (b"MZ", "PE executable"),
     (b"MOMO", "Pipeworks MOMO (DMC2-style)"),
     (b"AFS\0", "AFS archive"),
+    (b"ipum", "ipum image pack (DDS)"),
+    (b"\x30\x26\xB2\x75\x8E\x66\xCF\x11", "ASF (WMV/WMA video)"),
     (b"RIFF", "RIFF (WAV/AVI)"),
     (b"OggS", "Ogg"),
     (b"BIK", "Bink video"),
@@ -70,6 +72,11 @@ pub fn classify(data: &[u8]) -> Kind {
         return Kind::TextureSet {
             endian: set.endian,
             images: set.images.len(),
+        };
+    }
+    if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"FEV ") {
+        return Kind::Known {
+            name: "FMOD Studio bank",
         };
     }
     for (magic, name) in SIMPLE_MAGICS {

@@ -101,6 +101,20 @@ impl<'a> Reader<'a> {
         })
     }
 
+    pub fn u64(&self, offset: usize) -> Result<u64> {
+        let b = self.array(offset)?;
+        Ok(match self.endian {
+            Endian::Big => u64::from_be_bytes(b),
+            Endian::Little => u64::from_le_bytes(b),
+        })
+    }
+
+    /// A u64 offset, which must also fit in memory.
+    pub fn offset64(&self, offset: usize) -> Result<usize> {
+        usize::try_from(self.u64(offset)?)
+            .map_err(|_| FormatError::invalid("offset", format!("u64 at 0x{offset:x} too large")))
+    }
+
     pub fn f32(&self, offset: usize) -> Result<f32> {
         Ok(f32::from_bits(self.u32(offset)?))
     }
@@ -169,6 +183,14 @@ impl Writer {
         self.bytes(&b)
     }
 
+    pub fn u64(&mut self, v: u64) -> &mut Self {
+        let b = match self.endian {
+            Endian::Big => v.to_be_bytes(),
+            Endian::Little => v.to_le_bytes(),
+        };
+        self.bytes(&b)
+    }
+
     pub fn f32(&mut self, v: f32) -> &mut Self {
         self.u32(v.to_bits())
     }
@@ -193,6 +215,15 @@ impl Writer {
     pub fn set_u32(&mut self, offset: usize, v: u32) {
         let b = self.u32_bytes(v);
         self.buf[offset..offset + 4].copy_from_slice(&b);
+    }
+
+    /// Overwrite a u64 already written at `offset`.
+    pub fn set_u64(&mut self, offset: usize, v: u64) {
+        let b = match self.endian {
+            Endian::Big => v.to_be_bytes(),
+            Endian::Little => v.to_le_bytes(),
+        };
+        self.buf[offset..offset + 8].copy_from_slice(&b);
     }
 
     fn u32_bytes(&self, v: u32) -> [u8; 4] {

@@ -1,6 +1,7 @@
 //! Local exports for inspection in Blender or any glTF viewer. Output stays on
 //! the user's machine (DECISIONS.md, rule 6).
 
+use crate::archive::Source;
 use crate::gltf::Glb;
 use anyhow::{Context, Result, bail};
 use dmc_formats::geometry::Geometry;
@@ -10,9 +11,10 @@ use serde_json::{Value, json};
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
-const MODEL_EXTS: &[&str] = &["pld", "pws", "pwd", "emd", "fsd"];
+/// Room files (`.fsd`) use their own geometry records (docs/formats/README.md §4b)
+/// and are exported by the room pipeline instead.
+const MODEL_EXTS: &[&str] = &["pld", "pws", "pwd", "emd"];
 
 pub fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -228,38 +230,35 @@ pub fn model_to_glb(data: &[u8], out: &Path) -> Result<Stats> {
     Ok(stats)
 }
 
-pub fn batch(dir: &Path, out: &Path, pattern: Option<&str>) -> Result<()> {
+pub fn batch(source: &Path, out: &Path, pattern: Option<&str>) -> Result<()> {
+    let mut src = Source::open(source)?;
     let (mut ok, mut suspicious, mut failed) = (0, 0, Vec::new());
-    for entry in WalkDir::new(dir)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_default();
+    for entry in src.entries()? {
+        let name = entry
+            .name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&entry.name)
+            .to_ascii_lowercase();
         let wanted = match pattern {
             Some(p) => crate::wildcard::matches(&p.to_ascii_lowercase(), &name),
             None => name
                 .rsplit_once('.')
                 .is_some_and(|(_, e)| MODEL_EXTS.contains(&e)),
         };
-        if !entry.file_type().is_file() || !wanted {
+        if !wanted {
             continue;
         }
-        let rel = path.strip_prefix(dir).unwrap_or(path);
-        let dest = out.join(rel).with_extension("glb");
-        match crate::read(path).and_then(|d| model_to_glb(&d, &dest)) {
+        let dest = out.join(&entry.name).with_extension("glb");
+        match src.read(&entry.name).and_then(|d| model_to_glb(&d, &dest)) {
             Ok(s) => {
-                println!("OK   {:<40} {s}", rel.display());
+                println!("OK   {:<40} {s}", entry.name);
                 ok += 1;
                 suspicious += (!s.looks_valid()) as usize;
             }
             Err(e) => {
-                println!("FAIL {:<40} {e:#}", rel.display());
-                failed.push(rel.display().to_string());
+                println!("FAIL {:<40} {e:#}", entry.name);
+                failed.push(entry.name);
             }
         }
     }
@@ -293,7 +292,7 @@ mod tests {
             ik_flags: vec![0, 0],
             offsets: vec![[0., 0., 0.], [0., 1., 0.]],
         };
-        let geo = geometry::build(e, 1, &[vec![mesh]], Some(&skel));
+        let geo = geometry::build(e, geometry::Variant::Ps3, 1, &[vec![mesh]], Some(&skel));
         let px = [0x00, 0xF8, 0, 0, 0, 0, 0, 0];
         let tex = texture::build(
             texture::Kind::T32,

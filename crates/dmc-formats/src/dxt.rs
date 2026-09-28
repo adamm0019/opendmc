@@ -69,6 +69,14 @@ fn alpha_block(b: &[u8], out: &mut [[u8; 4]; 16]) {
     }
 }
 
+/// BC2 (DXT3): 16 explicit 4-bit alpha values.
+fn explicit_alpha_block(b: &[u8], out: &mut [[u8; 4]; 16]) {
+    for (i, texel) in out.iter_mut().enumerate() {
+        let nibble = (b[i / 2] >> (4 * (i % 2))) & 0xF;
+        texel[3] = nibble * 17;
+    }
+}
+
 pub fn bc1_size(w: u32, h: u32) -> usize {
     (w.div_ceil(4).max(1) * h.div_ceil(4).max(1)) as usize * 8
 }
@@ -77,12 +85,33 @@ pub fn bc3_size(w: u32, h: u32) -> usize {
     bc1_size(w, h) * 2
 }
 
-/// Decode a BC1 or BC3 surface. Missing trailing blocks decode as transparent
-/// black rather than failing, so a truncated file still gives a usable preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Block {
+    Bc1,
+    Bc2,
+    Bc3,
+}
+
+impl Block {
+    pub fn size(self, w: u32, h: u32) -> usize {
+        match self {
+            Block::Bc1 => bc1_size(w, h),
+            Block::Bc2 | Block::Bc3 => bc3_size(w, h),
+        }
+    }
+}
+
+/// Decode a BC1 or BC3 surface (see [`decode_block`]).
 pub fn decode(data: &[u8], w: u32, h: u32, bc3: bool) -> Vec<u8> {
+    decode_block(data, w, h, if bc3 { Block::Bc3 } else { Block::Bc1 })
+}
+
+/// Decode a BC1/BC2/BC3 surface. Missing trailing blocks decode as transparent
+/// black rather than failing, so a truncated file still gives a usable preview.
+pub fn decode_block(data: &[u8], w: u32, h: u32, kind: Block) -> Vec<u8> {
     let (w, h) = (w as usize, h as usize);
     let mut out = vec![0u8; w * h * 4];
-    let step = if bc3 { 16 } else { 8 };
+    let step = if kind == Block::Bc1 { 8 } else { 16 };
     let bw = w.div_ceil(4).max(1);
     let bh = h.div_ceil(4).max(1);
     let mut texels = [[0u8; 4]; 16];
@@ -92,11 +121,16 @@ pub fn decode(data: &[u8], w: u32, h: u32, bc3: bool) -> Vec<u8> {
             let Some(block) = data.get(o..o + step) else {
                 return out;
             };
-            if bc3 {
-                colour_block(&block[8..], true, &mut texels);
-                alpha_block(&block[..8], &mut texels);
-            } else {
-                colour_block(block, false, &mut texels);
+            match kind {
+                Block::Bc1 => colour_block(block, false, &mut texels),
+                Block::Bc2 => {
+                    colour_block(&block[8..], true, &mut texels);
+                    explicit_alpha_block(&block[..8], &mut texels);
+                }
+                Block::Bc3 => {
+                    colour_block(&block[8..], true, &mut texels);
+                    alpha_block(&block[..8], &mut texels);
+                }
             }
             for py in 0..4 {
                 let y = by * 4 + py;
@@ -145,6 +179,17 @@ mod tests {
         block[8..10].copy_from_slice(&0x07E0u16.to_le_bytes()); // green
         let px = decode(&block, 4, 4, true);
         assert!(px.chunks(4).all(|p| p == [0, 255, 0, 200]));
+    }
+
+    #[test]
+    fn bc2_explicit_alpha() {
+        let mut block = [0u8; 16];
+        block[0] = 0xF0; // texel 0 alpha 0, texel 1 alpha 15
+        block[8..10].copy_from_slice(&0x001Fu16.to_le_bytes()); // blue
+        let px = decode_block(&block, 4, 4, Block::Bc2);
+        assert_eq!(&px[0..4], &[0, 0, 255, 0]);
+        assert_eq!(&px[4..8], &[0, 0, 255, 255]);
+        assert_eq!(Block::Bc2.size(4, 4), 16);
     }
 
     #[test]
