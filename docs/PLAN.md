@@ -179,9 +179,12 @@ to authored cameras matches screenshots within ~1° and ~5% FOV.
   aim at the player's head.
 - `--start-camera N` starts in camera N's zone, for comparing one camera at a
   time with the original.
+- Props (section 19) parse (§4f), but where they stand is not in that
+  section.
 - To do:
-  - props (section 19);
-  - the per-camera object flags;
+  - prop placement;
+  - what hides the geometry between some eyes and the player (the camera's
+    +0xD0 bytes are not per-object occluder flags);
   - cut rules and blending, checked against captures of the original;
   - `r503`'s older camera layout.
 
