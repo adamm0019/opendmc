@@ -50,12 +50,14 @@ the checks named in each row.
 | Collision surface flags | `.fsd` section 9 | `dmc_formats::collision::surface` | partly understood | ground/wall/ceiling bits from normals; the rest unknown (§4d) |
 | Object culling tree | `.fsd` section 9 (after collision) | — | partly understood | 40-byte records repeating the objects' i16 bounds (§4c) |
 | Lighting | `.fsd` sections 4, 5 | — | unknown | float colours and positions in 3,168-byte blocks (§4c) |
-| Door / entry points | `.fsd` section 3? | — | unknown | 63 fixed slots of floor point + facing; not cameras (§4c) |
+| Door / entry points | `.fsd` section 3? | — | unknown | 63 fixed slots of floor point + facing; not cameras. Some slots name a destination room (`0x011B`, …) (§4c) |
+| Room props | `.fsd` section 19 | `dmc_formats::props` | partly understood | table walked exactly in 101/101 rooms (1,190 props, 8 empty slots); every geometry parses (80-byte mesh descriptors with vertex colours); 1,184 have unit normals; textures from the room, an embedded `T32` or an `ipum` sequence; `dmc room` writes a prop sheet. Placement not in the section; motion-like fields unread (§4f) |
+| Event-camera curves | `.fsd` section 21 | — | unknown | keyframed channels ending in FOV-like values (55, 45) (§4c) |
 | Cameras | `.fsd` section 2 | `dmc_formats::camera` | partly understood | 97/98 rooms parse (1,575 cameras; `r503` uses an older layout); zones cover 87% of floor collision; rail arc lengths match; the eye (+0x90 or the eye rail) keeps the player in view from 99.5% of zone samples; blending and several fields still to confirm in-game (§4e) |
 | Triggers / areas | ? | — | unknown | not located |
 | Event package (cutscene actors, `.ecd` scripts, `.fcv` curves) | `.fsd` section 30 | — | partly understood | path records read in `r002` (§4c) |
 | Room text | `.fsd` sections 22–29 | — | partly understood | offset/size packs of messages (§4c) |
-| Other room sections (0, 1, 15, 18, 19) | `.fsd` | — | unknown | §4c |
+| Other room sections (0, 1, 15, 18) | `.fsd` | — | unknown | §4c |
 
 ## Everything else
 

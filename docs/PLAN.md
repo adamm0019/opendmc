@@ -148,6 +148,7 @@ container type has a coverage status.
 | Rooms | `.fsd` section 14 + textures in 34 | glTF / Bevy scene | 106/106 convert; object bounds cross-check; overlays match screenshots at known camera angles |
 | Collision | `.fsd` section 9 (box tree of quads/triangles) | trimesh + surface flags | 106/106 rooms parse; counts and spans self-check; renders match geometry |
 | Cameras | `.fsd` section 2 (zones, rails, FOV) | camera zones + rails | parsed for 97 rooms; confirm behaviour against captures; `camfit` stays the fallback |
+| Props | `.fsd` section 19 (models + textures) | glTF / Bevy scene | 1,190/1,190 parse in 101 rooms; placement still to find (§4f) |
 | Audio | **unknown** | decoded PCM streams | play in sync with animation events |
 | Video | **unknown** (FMV) | external decoder or skip | — |
 

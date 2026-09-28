@@ -41,7 +41,7 @@ fn every_room_parses() {
         return;
     };
     assert_eq!(rooms.len(), 106);
-    let (mut cameras, mut polys) = (0, 0);
+    let (mut cameras, mut polys, mut props, mut unit_normals) = (0, 0, 0, 0);
     for (name, data) in &rooms {
         let room = Room::parse(data).unwrap_or_else(|e| panic!("{name}: {e}"));
         polys += room
@@ -52,9 +52,28 @@ fn every_room_parses() {
         if let Ok(c) = room.cameras(data) {
             cameras += c.cameras.len();
         }
+        if let Some(section) = room.section(data, dmc_formats::props::SECTION) {
+            let table = room.props(data).unwrap_or_else(|e| panic!("{name}: {e}"));
+            for (i, prop) in table.props() {
+                let g = prop
+                    .geometry(section)
+                    .unwrap_or_else(|e| panic!("{name} prop {i}: {e}"));
+                let meshes = g.objects.iter().flat_map(|o| &o.meshes);
+                let (sum, n) = meshes.fold((0.0, 0), |(s, n), m| {
+                    let v = m.vertex_count();
+                    (s + m.mean_normal_length() * v as f32, n + v)
+                });
+                unit_normals += (0.9..1.1).contains(&(sum / n as f32)) as usize;
+                props += 1;
+            }
+        }
     }
     assert_eq!(polys, 62_614);
     assert_eq!(cameras, 1_575);
+    assert_eq!(props, 1_190);
+    // Read with the right layout, normals are unit length. The exceptions
+    // are one 112-vertex model (three copies each in r408 and r40b).
+    assert_eq!(unit_normals, 1_184);
 }
 
 #[test]

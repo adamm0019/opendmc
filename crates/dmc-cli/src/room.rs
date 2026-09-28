@@ -6,8 +6,11 @@ use crate::export::encode_png;
 use crate::gltf::Glb;
 use anyhow::{Context, Result, bail};
 use dmc_formats::collision::{Collision, surface};
+use dmc_formats::props::{self, TextureRef};
 use dmc_formats::room::{Room, RoomObject};
+use dmc_formats::texture::TextureSet;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -35,6 +38,8 @@ pub struct RoomStats {
     /// Cameras (section 2); `None` when the section is missing or in the
     /// older layout.
     pub cameras: Option<usize>,
+    /// Props exported (section 19).
+    pub props: usize,
 }
 
 impl RoomStats {
@@ -50,7 +55,7 @@ impl fmt::Display for RoomStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5} cam={:>2}{}",
+            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5} cam={:>2} props={:2}{}",
             self.objects,
             self.meshes,
             self.vertices,
@@ -61,6 +66,7 @@ impl fmt::Display for RoomStats {
             self.objects,
             self.collision,
             self.cameras.map_or("-".to_string(), |n| n.to_string()),
+            self.props,
             if self.looks_valid() {
                 ""
             } else {
@@ -225,7 +231,141 @@ pub fn room_to_glb(data: &[u8], out: &Path) -> Result<RoomStats> {
             serde_json::to_vec_pretty(&cams)?,
         )?;
     }
+    if room.section(data, props::SECTION).is_some() {
+        stats.props = props_to_glb(&room, data, &out.with_extension("props.glb"))
+            .context("props (section 19)")?;
+    }
     Ok(stats)
+}
+
+/// Where an image comes from: the room's textures, or a container inside
+/// the props section (offset, image).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ImageSource {
+    Room(u32),
+    Embedded(usize, usize),
+}
+
+/// Every prop of section 19, side by side along +X in the order stored
+/// (where each stands in the room is not in the section). Returns how many
+/// were written.
+pub fn props_to_glb(room: &Room, data: &[u8], out: &Path) -> Result<usize> {
+    let section = room
+        .section(data, props::SECTION)
+        .context("no props section")?;
+    let table = room.props(data)?;
+    let room_textures = room.textures(data);
+    let mut glb = Glb::default();
+    let mut doc = json!({ "scene": 0, "scenes": [{ "nodes": [] }], "nodes": [], "meshes": [] });
+    let (mut images, mut materials) = (Vec::new(), Vec::new());
+    let mut cache: HashMap<ImageSource, Option<usize>> = HashMap::new();
+    let mut containers: HashMap<usize, Option<TextureSet>> = HashMap::new();
+    let (mut roots, mut cursor, mut written) = (Vec::new(), 0.0f32, 0);
+    let mut fallback = None;
+
+    for (index, prop) in table.props() {
+        let geo = prop.geometry(section)?;
+        let mut prims = Vec::new();
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for m in geo.objects.iter().flat_map(|o| &o.meshes) {
+            let tris = m.triangles();
+            if tris.is_empty() {
+                continue;
+            }
+            for p in &m.positions {
+                lo = lo.min(p[0]);
+                hi = hi.max(p[0]);
+            }
+            let slot = m.tex_index as usize;
+            let source = match prop.textures.get(slot).or(prop.textures.first()) {
+                Some(TextureRef::Room(i)) => Some(ImageSource::Room(*i)),
+                Some(TextureRef::Embedded(off)) => Some(ImageSource::Embedded(*off, slot)),
+                _ => None,
+            };
+            let material = source.and_then(|src| {
+                *cache.entry(src).or_insert_with(|| {
+                    let (w, h, rgba) = match src {
+                        ImageSource::Room(i) => {
+                            let (bytes, set) = room_textures.as_ref()?;
+                            let img = set.images.get(i as usize)?;
+                            (img.width, img.height, set.decode_rgba(bytes, img).ok()??)
+                        }
+                        ImageSource::Embedded(off, i) => {
+                            let set = containers
+                                .entry(off)
+                                .or_insert_with(|| TextureSet::parse(&section[off..]).ok())
+                                .as_ref()?;
+                            let img = set.images.get(i)?;
+                            (img.width, img.height, set.decode_rgba(&section[off..], img).ok()??)
+                        }
+                    };
+                    let png = encode_png(w as u32, h as u32, &rgba).ok()?;
+                    let view = glb.view(&png, None);
+                    images.push(json!({ "bufferView": view, "mimeType": "image/png" }));
+                    materials.push(json!({
+                        "pbrMetallicRoughness": { "baseColorTexture": { "index": images.len() - 1 }, "metallicFactor": 0.0, "roughnessFactor": 1.0 },
+                        "alphaMode": "MASK", "doubleSided": true
+                    }));
+                    Some(materials.len() - 1)
+                })
+            });
+            let material = material.unwrap_or_else(|| {
+                *fallback.get_or_insert_with(|| {
+                    materials.push(json!({ "pbrMetallicRoughness": { "baseColorFactor": [0.7, 0.7, 0.7, 1.0] }, "doubleSided": true }));
+                    materials.len() - 1
+                })
+            });
+            let mut attrs = json!({
+                "POSITION": glb.floats(&m.positions, "VEC3", true),
+                "NORMAL": glb.floats(&unit_normals(&m.normals), "VEC3", false),
+                "TEXCOORD_0": glb.floats(&m.uvs, "VEC2", false),
+            });
+            if m.colours.len() == m.positions.len() {
+                // Vertex lighting, read like the room's (§4b): provisional.
+                let colours: Vec<[f32; 3]> = m
+                    .colours
+                    .iter()
+                    .map(|c| [c[0], c[1], c[2]].map(|v| v as f32 / 255.0))
+                    .collect();
+                attrs["COLOR_0"] = json!(glb.floats(&colours, "VEC3", false));
+            }
+            prims.push(
+                json!({ "attributes": attrs, "indices": glb.indices(&tris), "material": material }),
+            );
+        }
+        if prims.is_empty() {
+            continue;
+        }
+        let meshes = doc["meshes"].as_array_mut().unwrap();
+        meshes.push(json!({ "name": format!("prop{index:02}"), "primitives": prims }));
+        let mesh = meshes.len() - 1;
+        let nodes = doc["nodes"].as_array_mut().unwrap();
+        nodes.push(json!({
+            "name": format!("prop{index:02}"),
+            "mesh": mesh,
+            "translation": [cursor - lo, 0.0, 0.0],
+        }));
+        roots.push(nodes.len() - 1);
+        cursor += (hi - lo) + 200.0;
+        written += 1;
+    }
+    if written == 0 {
+        return Ok(0);
+    }
+    if !images.is_empty() {
+        doc["textures"] = json!(
+            (0..images.len())
+                .map(|i| json!({ "source": i, "sampler": 0 }))
+                .collect::<Vec<_>>()
+        );
+        doc["samplers"] =
+            json!([{ "magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497 }]);
+        doc["images"] = Value::Array(images);
+    }
+    doc["materials"] = Value::Array(materials);
+    doc["scenes"][0]["nodes"] = json!(roots);
+    fs::write(out, glb.finish(doc))?;
+    Ok(written)
 }
 
 /// Surface classes for colouring the collision export.

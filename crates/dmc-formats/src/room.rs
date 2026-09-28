@@ -8,6 +8,7 @@ use crate::collision::{self, Collision};
 use crate::error::{FormatError, Result};
 use crate::geometry::PC_PAD;
 use crate::model::{Layout, ModelFile};
+use crate::props::{self, Props};
 use crate::texture::TextureSet;
 use serde::Serialize;
 
@@ -270,6 +271,14 @@ impl Room {
     }
 
     /// The collision tree and polygons of section 9.
+    /// The props of section 19.
+    pub fn props(&self, data: &[u8]) -> Result<Props> {
+        let section = self
+            .section(data, props::SECTION)
+            .ok_or_else(|| FormatError::invalid("room", "props section is empty"))?;
+        Props::parse(section)
+    }
+
     pub fn collision(&self, data: &[u8]) -> Result<Collision> {
         let section = self
             .section(data, collision::SECTION)
