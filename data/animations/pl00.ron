@@ -1,0 +1,18 @@
+// Which of the player body's motions the renderer plays for each free
+// movement state. Motions are "section:index" into the model's own banks;
+// this file holds only those references, never game data.
+//
+// EVERY entry is a tentative identification from `dmc motions` (root travel,
+// loop gap, length) and `opendmc --grid`, not a check against the original.
+// Replace `source` with the capture that confirms it (ADR-004).
+(
+    model: "pl00",
+    // 6:74 (and 6:154, 6:200, 6:201) hold a static reference pose, not an idle.
+    idle: (motion: "6:209", source: "tentative: 122-frame loop, no root travel, standing with a hand to the head in --grid/--focus renders"),
+    walk: (motion: "6:0", source: "tentative: 62 frames, ~1 body height of travel per second"),
+    run: (motion: "6:3", source: "tentative: 52 frames, ~2.4 body heights of travel per second"),
+    air: (motion: "6:43", source: "tentative: 85 frames, root rises ~1.4 body heights"),
+    // Horizontal speed (sim units/s) above which walk and run play.
+    walk_speed: 0.4,
+    run_speed: 3.0,
+)

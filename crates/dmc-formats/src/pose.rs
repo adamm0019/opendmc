@@ -111,8 +111,22 @@ fn bend_sign(root_flag: u8) -> f32 {
     if root_flag % 2 == 1 { 1.0 } else { -1.0 }
 }
 
+/// What to do with a motion's root motion (channel 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootMotion {
+    /// Add it to bone 0, as the motion was authored (viewers, export).
+    Apply,
+    /// Drop it: the character is moved by the simulation instead.
+    InPlace,
+}
+
 /// Sample `motion` at `frame` (60 fps frames, fractional allowed).
 pub fn sample(skeleton: &Skeleton, motion: &Motion, frame: f32) -> Pose {
+    sample_with(skeleton, motion, frame, RootMotion::Apply)
+}
+
+/// [`sample`], choosing what happens to root motion.
+pub fn sample_with(skeleton: &Skeleton, motion: &Motion, frame: f32, root: RootMotion) -> Pose {
     let n = skeleton.bone_count();
     let mut locals = Pose::bind(skeleton).locals;
     let mut euler_xyz = vec![None::<[f32; 3]>; n];
@@ -126,7 +140,7 @@ pub fn sample(skeleton: &Skeleton, motion: &Motion, frame: f32) -> Pose {
         let v = channel.sample(frame);
         let or = |i: usize, d: f32| v[i].unwrap_or(d);
         match motion.target(c, skeleton) {
-            Some(Target::RootMotion) if n > 0 => {
+            Some(Target::RootMotion) if n > 0 && root == RootMotion::Apply => {
                 locals[0].translation += Vec3::new(or(0, 0.0), or(1, 0.0), or(2, 0.0));
             }
             Some(Target::Rotation(b)) if (b as usize) < n => {
@@ -292,6 +306,19 @@ mod tests {
         // Hip offset +X rotated a quarter turn about Y points along -Z.
         let hip = p.globals[1].w_axis.truncate() - p.globals[0].w_axis.truncate();
         assert!(hip.abs_diff_eq(Vec3::new(0.0, 0.0, -0.1), 1e-5), "{hip}");
+    }
+
+    #[test]
+    fn in_place_drops_root_motion() {
+        let s = skel();
+        let m = motion(vec![], vec![Channel::default(), constant([0.0, 0.0, 2.0])]);
+        let p = sample_with(&s, &m, 0.0, RootMotion::InPlace);
+        assert!(
+            p.globals[0]
+                .w_axis
+                .truncate()
+                .abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-6)
+        );
     }
 
     #[test]

@@ -35,10 +35,13 @@ const PREVIEW_HEIGHT: f32 = 2.0;
 
 /// The loaded model's skeleton, joints and chosen motion.
 #[derive(Component)]
-struct Animated {
-    skeleton: Skeleton,
-    joints: Vec<Entity>,
-    motion: Option<Motion>,
+pub(crate) struct Animated {
+    pub skeleton: Skeleton,
+    pub joints: Vec<Entity>,
+    pub motion: Option<Motion>,
+    /// Frame to show; `None` loops the motion on the sim tick.
+    pub frame: Option<f32>,
+    pub root: pose::RootMotion,
 }
 
 fn texture_materials(
@@ -107,13 +110,13 @@ fn pick_motion(data: &[u8], model: &ModelFile, spec: &str) -> Option<Motion> {
 }
 
 /// Everything shared by the instances of one model.
-struct Parts {
+pub(crate) struct Parts {
     meshes: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     skeleton: Option<Skeleton>,
     inverse_bindposes: Option<Handle<SkinnedMeshInverseBindposes>>,
     /// Model-space offset that centres the model and puts its feet at 0.
-    origin: Vec3,
-    scale: f32,
+    pub origin: Vec3,
+    pub scale: f32,
     /// Render layers for the meshes (`None`: the default layer).
     layers: Option<RenderLayers>,
 }
@@ -125,27 +128,31 @@ const GRID_SPACING: f32 = 2.6;
 /// Far enough from the arena that nothing overlaps.
 const GRID_ORIGIN: Vec3 = Vec3::new(0.0, 0.0, -80.0);
 
-#[allow(clippy::too_many_arguments)]
-fn load_model(
-    options: Res<Options>,
-    mut commands: Commands,
-    mut mesh_assets: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
-    windows: Query<&Window>,
-    room: Option<Res<crate::room_view::RoomSpot>>,
-) {
-    let Some(path) = &options.model else { return };
-    let data = match std::fs::read(path) {
-        Ok(d) => d,
-        Err(e) => return error!("{}: {e}", path.display()),
-    };
-    let (model, geo) = match ModelFile::detect(&data) {
-        Ok(found) => found,
-        Err(e) => return error!("{}: not a recognised model ({e})", path.display()),
-    };
-    let slot_materials = texture_materials(&data, &geo, &mut materials, &mut images);
+/// A model file read into GPU-ready parts, plus its parsed file.
+pub(crate) struct LoadedModel {
+    pub data: Vec<u8>,
+    pub model: ModelFile,
+    pub parts: Parts,
+    /// Height in model units (feet to top of head in bind pose).
+    pub height: f32,
+    pub vertices: usize,
+    pub texture_slots: usize,
+}
+
+pub(crate) fn load_parts(
+    path: &std::path::Path,
+    mesh_assets: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+) -> Option<LoadedModel> {
+    let data = std::fs::read(path)
+        .map_err(|e| error!("{}: {e}", path.display()))
+        .ok()?;
+    let (model, geo) = ModelFile::detect(&data)
+        .map_err(|e| error!("{}: not a recognised model ({e})", path.display()))
+        .ok()?;
+    let slot_materials = texture_materials(&data, &geo, materials, images);
     let fallback = materials.add(StandardMaterial {
         base_color: Color::srgb(0.7, 0.7, 0.7),
         double_sided: true,
@@ -216,6 +223,45 @@ fn load_model(
             .unwrap_or_else(|| fallback.clone());
         parts.meshes.push((mesh_assets.add(mesh), material));
     }
+    Some(LoadedModel {
+        vertices: geo.vertex_count(),
+        texture_slots: slot_materials.len(),
+        height: (hi.y - lo.y).max(1e-3),
+        data,
+        model,
+        parts,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_model(
+    options: Res<Options>,
+    mut commands: Commands,
+    mut mesh_assets: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
+    windows: Query<&Window>,
+    room: Option<Res<crate::room_view::RoomSpot>>,
+) {
+    let Some(path) = &options.model else { return };
+    let Some(LoadedModel {
+        data,
+        model,
+        parts,
+        vertices,
+        texture_slots,
+        ..
+    }) = load_parts(
+        path,
+        &mut mesh_assets,
+        &mut materials,
+        &mut images,
+        &mut bindposes,
+    )
+    else {
+        return;
+    };
 
     let size = windows
         .iter()
@@ -280,8 +326,8 @@ fn load_model(
         "{}: {} meshes, {} vertices, {} texture slots, motion {}",
         path.display(),
         parts.meshes.len(),
-        geo.vertex_count(),
-        slot_materials.len(),
+        vertices,
+        texture_slots,
         motion
             .as_ref()
             .map_or("none".into(), |m| format!("{} frames", m.frames))
@@ -329,7 +375,7 @@ fn load_model(
 
 /// One copy of the model standing at `at`, with its own joints.
 /// Returns the instance's root entity.
-fn spawn_instance(
+pub(crate) fn spawn_instance(
     commands: &mut Commands,
     parts: &Parts,
     at: Vec3,
@@ -384,6 +430,8 @@ fn spawn_instance(
             skeleton,
             joints,
             motion,
+            frame: None,
+            root: pose::RootMotion::Apply,
         });
     }
     root
@@ -396,8 +444,10 @@ fn animate(
 ) {
     for a in &models {
         let Some(motion) = &a.motion else { continue };
-        let frame = (state.sim.tick % motion.frames.max(1) as u64) as f32;
-        let p = pose::sample(&a.skeleton, motion, frame);
+        let frame = a
+            .frame
+            .unwrap_or((state.sim.tick % motion.frames.max(1) as u64) as f32);
+        let p = pose::sample_with(&a.skeleton, motion, frame, a.root);
         for (j, l) in a.joints.iter().zip(&p.locals) {
             if let Ok(mut t) = transforms.get_mut(*j) {
                 *t = Transform {

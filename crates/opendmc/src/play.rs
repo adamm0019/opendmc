@@ -90,7 +90,7 @@ struct Director {
 struct DebugView(bool);
 
 #[derive(Component)]
-struct ActorVisual(usize);
+pub struct ActorVisual(pub usize);
 
 #[derive(Component)]
 struct Hud;
