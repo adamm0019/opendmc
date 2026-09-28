@@ -535,6 +535,17 @@ model in `r408`/`r40b`. Renders of `r100`'s props (a carved stone block on
 room images 20 and 27; three copies of a 17-bone model with an embedded
 texture) show coherent shapes and textures.
 
+**Texture V** is taken as stored, as for the PC characters (§4.2), but only
+weakly supported. The check:
+- Take the triangles on images that are partly transparent.
+- Count those whose UV centroid lands on a transparent texel.
+- Props: 45,283 of 148,135 as stored, 49,325 flipped.
+- Room meshes, as a control: 127,899 of 519,939 as stored, 85,669 flipped.
+  They are known to need the flip, so the test points the right way, but it
+  separates the two conventions weakly.
+
+Confirm on a prop with lettering.
+
 **Placement is not in this section.** Every prop is modelled around its own
 origin (bone 0 at 0,0,0). Several sets of copies share one geometry and
 differ only in their texture or motion field (`r100` props 1–3, `r104`
