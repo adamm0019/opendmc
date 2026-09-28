@@ -169,6 +169,21 @@ never committed.
 **Exit:** Mission 1's rooms can be walked with the free camera, and switching
 to authored cameras matches screenshots within ~1° and ~5% FOV.
 
+**Status: started.** Camera data did turn up (`.fsd` section 2, §4e), so
+`camfit` is only a fallback for now.
+- `opendmc --room <your .fsd>` shows a room with a free-fly camera.
+- Adding `--walk` puts the sim on the room's collision and hands the view to
+  the room's own cameras (`opendmc::room_cameras`): the zone holding the player
+  picks the camera, a rail camera slides along its eye rail, and all of them
+  aim at the player's head.
+- `--start-camera N` starts in camera N's zone, for comparing one camera at a
+  time with the original.
+- To do:
+  - props (section 19);
+  - the per-camera object flags;
+  - cut rules and blending, checked against captures of the original;
+  - `r503`'s older camera layout.
+
 ### Phase 4: Dante on screen *(2–3 weeks)*
 - Skinned model, runtime IK, coat skeleton (the second motion bank, with
   optional spring physics in the Enhanced profile).

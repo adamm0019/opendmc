@@ -7,6 +7,7 @@
 
 use crate::Options;
 use crate::cameras::{CameraSet, TRAINING_ROOM};
+use crate::room_cameras::RoomDirector;
 use bevy::prelude::*;
 use dmc_sim::actor::{State, Team};
 use dmc_sim::ai::{Brain, MeleeBrainParams};
@@ -89,6 +90,13 @@ struct Director {
 #[derive(Resource)]
 struct DebugView(bool);
 
+/// `--walk`: the room's own cameras, which replace the training cameras.
+#[derive(Resource)]
+pub struct RoomCams {
+    pub director: RoomDirector,
+    pub active: Option<usize>,
+}
+
 #[derive(Component)]
 pub struct ActorVisual(pub usize);
 
@@ -107,10 +115,24 @@ fn v(p: V3) -> Vec3 {
 }
 
 fn setup_scene(
+    options: Res<Options>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     state: Res<SimState>,
+) {
+    if !options.walk {
+        spawn_arena(&mut commands, &mut meshes, &mut materials, &state);
+    }
+    spawn_actors(&mut commands, &mut meshes, &mut materials, &state);
+}
+
+/// The graybox floor, pillars and tiles (not used when walking a room).
+fn spawn_arena(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    state: &SimState,
 ) {
     let extent = state.sim.rules.arena_half_extent;
     commands.spawn((
@@ -140,7 +162,14 @@ fn setup_scene(
             }
         }
     }
+}
 
+fn spawn_actors(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    state: &SimState,
+) {
     // Actors: capsule body plus a small block showing which way it faces.
     let marker = meshes.add(Cuboid::new(0.25, 0.25, 0.5));
     for (i, a) in state.sim.actors.iter().enumerate() {
@@ -237,6 +266,7 @@ fn step_sim(
     mut state: ResMut<SimState>,
     mut controls: ResMut<Controls>,
     mut director: ResMut<Director>,
+    room_cams: Option<Res<RoomCams>>,
     options: Res<Options>,
     mut debug: ResMut<DebugView>,
 ) {
@@ -250,10 +280,19 @@ fn step_sim(
         debug.0 = true;
         crate::capture::demo_input(state.sim.tick)
     } else {
-        let forward = director
-            .active
-            .map(|i| director.cameras.zones[i].forward())
-            .unwrap_or(V3::FORWARD);
+        let forward = match &room_cams {
+            Some(rc) => rc
+                .active
+                .map(|i| {
+                    let view = rc.director.cameras[i].view(state.sim.player().pos);
+                    (view.target - view.eye).flat().normalize_or(V3::FORWARD)
+                })
+                .unwrap_or(V3::FORWARD),
+            None => director
+                .active
+                .map(|i| director.cameras.zones[i].forward())
+                .unwrap_or(V3::FORWARD),
+        };
         let world = director.relative.world_direction(controls.stick, forward);
         InputFrame {
             buttons: controls.held | controls.latched,
@@ -294,9 +333,23 @@ fn sync_visuals(
 fn direct_camera(
     state: Res<SimState>,
     mut director: ResMut<Director>,
+    room_cams: Option<ResMut<RoomCams>>,
     mut cam: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
 ) {
     let player = state.sim.player().pos;
+    if let Some(mut rc) = room_cams {
+        // Room cameras can move with the player (rails), so update every frame.
+        rc.active = rc.director.select(rc.active, player);
+        let Some(i) = rc.active else { return };
+        let view = rc.director.cameras[i].view(player);
+        for (mut t, mut proj) in &mut cam {
+            *t = Transform::from_translation(v(view.eye)).looking_at(v(view.target), Vec3::Y);
+            if let Projection::Perspective(p) = &mut *proj {
+                p.fov = view.fov_degrees.to_radians();
+            }
+        }
+        return;
+    }
     let selected = director.cameras.select(director.active, player);
     if selected == director.active && director.active.is_some() {
         return;
@@ -313,7 +366,12 @@ fn direct_camera(
     }
 }
 
-fn update_hud(state: Res<SimState>, director: Res<Director>, mut hud: Query<&mut Text, With<Hud>>) {
+fn update_hud(
+    state: Res<SimState>,
+    director: Res<Director>,
+    room_cams: Option<Res<RoomCams>>,
+    mut hud: Query<&mut Text, With<Hud>>,
+) {
     let sim = &state.sim;
     let p = sim.player();
     let doing = match &p.state {
@@ -327,10 +385,16 @@ fn update_hud(state: Res<SimState>, director: Res<Director>, mut hud: Query<&mut
         .lock_target
         .map(|t| format!("  lock-on: #{t} ({:.0} hp)", sim.actors[t].health))
         .unwrap_or_default();
-    let camera = director
-        .active
-        .map(|i| director.cameras.zones[i].name.as_str())
-        .unwrap_or("-");
+    let camera = match &room_cams {
+        Some(rc) => rc
+            .active
+            .map(|i| format!("room camera {i}"))
+            .unwrap_or_else(|| "-".into()),
+        None => director
+            .active
+            .map(|i| director.cameras.zones[i].name.clone())
+            .unwrap_or_else(|| "-".into()),
+    };
     let text = format!(
         "OpenDMC graybox | {:?} profile | tick {}\n\
          HP {:.0}/{:.0}   Style {} ({:.0})   DT {:.0}{}\n\

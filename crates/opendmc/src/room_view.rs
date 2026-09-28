@@ -2,15 +2,21 @@
 //! placed by its own matrix, textured and lit by its stored vertex colours
 //! (the original's baked lighting, so materials are unlit). A fly camera
 //! starts inside at eye height: arrow keys move, PageUp/PageDown rise and
-//! sink, `,`/`.` turn. Nothing is cached or written.
+//! sink, `,`/`.` turn. With `--walk` the room is the play space instead: the
+//! sim runs on its collision and the room's own cameras follow the player.
+//! Nothing is cached or written.
 
 use crate::Options;
+use crate::play::{RoomCams, SimState};
+use crate::room_cameras::{RoomCamera, RoomDirector};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use dmc_formats::room::Room;
+use dmc_sim::world::World;
+use dmc_sim::{Sim, V3};
 
 pub struct RoomViewPlugin;
 
@@ -45,6 +51,16 @@ pub fn room_layer() -> RenderLayers {
     RenderLayers::layer(ROOM_LAYER)
 }
 
+/// Where the room sits: apart from the arena when viewing, at the sim's
+/// origin when walking (room space is then sim space).
+fn origin(options: &Options) -> Vec3 {
+    if options.walk {
+        Vec3::ZERO
+    } else {
+        ROOM_ORIGIN
+    }
+}
+
 #[derive(Component)]
 struct FlyCamera {
     yaw: f32,
@@ -52,6 +68,7 @@ struct FlyCamera {
 
 pub fn load_room(
     options: Res<Options>,
+    mut state: ResMut<SimState>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -111,7 +128,7 @@ pub fn load_room(
 
     let root = commands
         .spawn((
-            Transform::from_translation(ROOM_ORIGIN).with_scale(Vec3::splat(ROOM_SCALE)),
+            Transform::from_translation(origin(&options)).with_scale(Vec3::splat(ROOM_SCALE)),
             Visibility::default(),
         ))
         .id();
@@ -169,11 +186,17 @@ pub fn load_room(
                 .get(m.tex_index as usize)
                 .cloned()
                 .unwrap_or_else(|| fallback.clone());
+            // Walking, the room shares the main camera's layer with the actors.
+            let layer = if options.walk {
+                RenderLayers::default()
+            } else {
+                room_layer()
+            };
             commands.spawn((
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(material),
                 ChildOf(node),
-                RenderLayers::layer(ROOM_LAYER),
+                layer,
             ));
         }
         objects += 1;
@@ -194,7 +217,7 @@ pub fn load_room(
         v.sort_by(f32::total_cmp);
         v[((v.len() - 1) as f32 * q) as usize]
     };
-    let at = |x: f32, y: f32, z: f32| ROOM_ORIGIN + Vec3::new(x, y, z) * ROOM_SCALE;
+    let at = |x: f32, y: f32, z: f32| origin(&options) + Vec3::new(x, y, z) * ROOM_SCALE;
     let floor = pct(1, 0.05);
     let (x, z0, z1) = (pct(0, 0.5), pct(2, 0.1), pct(2, 0.9));
     let eye = at(x, floor, z1) + Vec3::Y * EYE_HEIGHT;
@@ -205,6 +228,16 @@ pub fn load_room(
         // Models face +Z natively, which is towards the camera here.
         facing: Quat::IDENTITY,
     });
+    if options.walk {
+        start_walking(
+            &room,
+            &data,
+            options.start_camera,
+            &mut state.sim,
+            &mut commands,
+        );
+        return;
+    }
     // Lights respect render layers too. The room itself is unlit (its
     // lighting is baked into vertex colours); this lights models in it.
     commands.spawn((
@@ -227,6 +260,86 @@ pub fn load_room(
         FlyCamera { yaw },
         RenderLayers::layer(ROOM_LAYER),
     ));
+}
+
+/// Put the sim on the room's collision, the actors on its floor, and its
+/// cameras in charge of the view. The player starts in `start_camera`'s zone,
+/// or else in the first zone with a floor.
+fn start_walking(
+    room: &Room,
+    data: &[u8],
+    start_camera: Option<usize>,
+    sim: &mut Sim,
+    commands: &mut Commands,
+) {
+    let s = ROOM_SCALE;
+    let collision = match room.collision(data) {
+        Ok(c) => c,
+        Err(e) => return error!("--walk: no collision ({e})"),
+    };
+    let world = World::new(
+        collision
+            .triangles()
+            .map(|(t, flags)| (t.map(|p| V3::new(p[0] * s, p[1] * s, p[2] * s)), flags)),
+        2.0,
+    );
+    let director = match room.cameras(data) {
+        Ok(c) => RoomDirector::new(&c.cameras, s),
+        Err(e) => {
+            warn!("--walk: no room cameras ({e}); the view stays on the start camera");
+            RoomDirector::default()
+        }
+    };
+    let floor_in = |c: &RoomCamera| {
+        let m = c.zone_centre();
+        world
+            .ground(m, 0.0, 1e4)
+            .map(|g| V3::new(m.x, g.height, m.z))
+    };
+    let start = match start_camera {
+        Some(i) => match director.cameras.get(i) {
+            Some(c) => floor_in(c),
+            None => {
+                return error!(
+                    "--start-camera {i}: the room has {} cameras",
+                    director.cameras.len()
+                );
+            }
+        },
+        None => director.cameras.iter().find_map(floor_in),
+    };
+    let start = start.or_else(|| {
+        world
+            .triangles()
+            .iter()
+            .find(|t| t.normal.y > 0.7)
+            .map(|t| (t.a + t.b + t.c) * (1.0 / 3.0))
+    });
+    let Some(start) = start else {
+        return error!("--walk: the room has no floor");
+    };
+    sim.world = Some(world);
+    for (i, a) in sim.actors.iter_mut().enumerate() {
+        // The player at the start, the others a few steps away; everyone
+        // settles onto the floor on the first ticks.
+        let offset = if i == 0 {
+            V3::ZERO
+        } else {
+            V3::new(1.5 * i as f32, 0.5, 2.5)
+        };
+        a.pos = start + offset;
+        a.vel = V3::ZERO;
+        a.grounded = false;
+    }
+    info!(
+        "--walk: {} collision triangles, {} cameras, start {start:?}",
+        sim.world.as_ref().map_or(0, |w| w.triangles().len()),
+        director.cameras.len()
+    );
+    commands.insert_resource(RoomCams {
+        director,
+        active: None,
+    });
 }
 
 fn fly(
