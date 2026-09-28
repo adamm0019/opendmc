@@ -2068,6 +2068,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dmc-formats",
+ "dmc-sim",
  "gltf",
  "png 0.17.16",
  "serde",
