@@ -4,7 +4,8 @@
 //! 2. player control (start/chain/cancel moves, movement)
 //! 3. enemy brains
 //! 4. physics for every actor not frozen by hit-stop (root motion, gravity,
-//!    integration, ground, arena bounds)
+//!    integration, then either room collision (walls, ground, steps) or the
+//!    flat graybox floor and arena bounds)
 //! 5. hit resolution on this tick's active frames
 //! 6. timers: move frames advance, hit-stun and hit-stop count down
 //! 7. meters (style decay, DT drain/heal)
@@ -17,6 +18,7 @@ use crate::math::{V3, point_segment_distance};
 use crate::meters::{DevilTrigger, StyleMeter};
 use crate::moves::{CancelInto, HitWindow, MoveDef, MoveSet, Stance, builtin};
 use crate::rules::Rules;
+use crate::world::{Body, World};
 use serde::Serialize;
 
 pub const PLAYER: usize = 0;
@@ -64,6 +66,9 @@ pub struct Sim {
     pub style: StyleMeter,
     pub dt: DevilTrigger,
     pub lock_target: Option<usize>,
+    /// Room collision. `None` means the graybox: a flat floor at y = 0 inside
+    /// `rules.arena_half_extent`.
+    pub world: Option<World>,
     rng: u64,
     next_instance: u32,
     /// Ticks the player has spent frozen since last acting (extends the buffer).
@@ -95,11 +100,19 @@ impl Sim {
             style: StyleMeter::default(),
             dt: DevilTrigger::default(),
             lock_target: None,
+            world: None,
             rng: seed | 1,
             next_instance: 0,
             freeze_credit: 0,
             events: Vec::new(),
         }
+    }
+
+    /// Use room collision instead of the graybox floor. The world is static,
+    /// so it is not part of [`Sim::state_hash`].
+    pub fn with_world(mut self, world: World) -> Self {
+        self.world = Some(world);
+        self
     }
 
     /// A training room: the player, plus one dummy two units ahead (inside
@@ -483,8 +496,24 @@ impl Sim {
             a.vel.y -= gravity * DT;
         }
         a.pos += a.vel * DT;
-        if a.pos.y <= 0.0 {
-            a.pos.y = 0.0;
+        let ground = match &self.world {
+            Some(w) => {
+                let body = Body::PLAYER;
+                a.pos = w.push_out(a.pos, body);
+                if a.vel.y <= 0.0 {
+                    // Look up far enough to catch this tick's whole fall, so a
+                    // fast drop can't pass through a floor.
+                    let above = body.step_up.max(-a.vel.y * DT);
+                    let below = if a.grounded { body.snap_down } else { 0.0 };
+                    w.ground(a.pos, above, below).map(|g| g.height)
+                } else {
+                    None
+                }
+            }
+            None => (a.pos.y <= 0.0).then_some(0.0),
+        };
+        if let Some(h) = ground {
+            a.pos.y = h;
             if !a.grounded {
                 a.grounded = true;
                 a.vel.y = 0.0;
@@ -499,9 +528,11 @@ impl Sim {
                 a.state = State::Air;
             }
         }
-        let e = rules.arena_half_extent;
-        a.pos.x = a.pos.x.clamp(-e, e);
-        a.pos.z = a.pos.z.clamp(-e, e);
+        if self.world.is_none() {
+            let e = rules.arena_half_extent;
+            a.pos.x = a.pos.x.clamp(-e, e);
+            a.pos.z = a.pos.z.clamp(-e, e);
+        }
     }
 
     fn resolve_hits(&mut self, frozen: &[bool]) {

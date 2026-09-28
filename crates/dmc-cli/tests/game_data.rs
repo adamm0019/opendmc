@@ -1,0 +1,134 @@
+//! Checks against a real install. They run only when `OPENDMC_GAME_DIR`
+//! names the HD Collection folder (the one holding `data/dmc1`), so CI and
+//! machines without the game skip them. Nothing from the game is written.
+
+use dmc_formats::room::Room;
+use dmc_sim::input::InputFrame;
+use dmc_sim::sim::PLAYER;
+use dmc_sim::world::{ROOM_UNITS_PER_SIM_UNIT, World};
+use dmc_sim::{Rules, Sim, V3};
+use std::io::Read;
+use std::path::PathBuf;
+
+fn archive() -> Option<zip::ZipArchive<std::fs::File>> {
+    let dir = PathBuf::from(std::env::var_os("OPENDMC_GAME_DIR")?);
+    let nbz = dir.join("data/dmc1/dmc1-0.nbz");
+    let file = std::fs::File::open(&nbz)
+        .unwrap_or_else(|e| panic!("OPENDMC_GAME_DIR is set but {}: {e}", nbz.display()));
+    Some(zip::ZipArchive::new(file).expect("dmc1-0.nbz is a ZIP"))
+}
+
+/// Every room file, as (name, bytes).
+fn rooms() -> Option<Vec<(String, Vec<u8>)>> {
+    let mut z = archive()?;
+    let mut out = Vec::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        if !f.name().to_ascii_lowercase().ends_with(".fsd") {
+            continue;
+        }
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        out.push((f.name().to_string(), data));
+    }
+    Some(out)
+}
+
+#[test]
+fn every_room_parses() {
+    let Some(rooms) = rooms() else {
+        eprintln!("OPENDMC_GAME_DIR not set; skipped");
+        return;
+    };
+    assert_eq!(rooms.len(), 106);
+    let (mut cameras, mut polys) = (0, 0);
+    for (name, data) in &rooms {
+        let room = Room::parse(data).unwrap_or_else(|e| panic!("{name}: {e}"));
+        polys += room
+            .collision(data)
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .polys
+            .len();
+        if let Ok(c) = room.cameras(data) {
+            cameras += c.cameras.len();
+        }
+    }
+    assert_eq!(polys, 62_614);
+    assert_eq!(cameras, 1_575);
+}
+
+#[test]
+fn the_player_stays_on_real_floors() {
+    let Some(rooms) = rooms() else {
+        eprintln!("OPENDMC_GAME_DIR not set; skipped");
+        return;
+    };
+    let s = 1.0 / ROOM_UNITS_PER_SIM_UNIT;
+    let (mut runs, mut left) = (0, Vec::new());
+    for (name, data) in &rooms {
+        let room = Room::parse(data).unwrap();
+        let col = room.collision(data).unwrap();
+        let world = World::new(
+            col.triangles()
+                .map(|(t, flags)| (t.map(|p| V3::new(p[0] * s, p[1] * s, p[2] * s)), flags)),
+            2.0,
+        );
+        let lowest = world
+            .triangles()
+            .iter()
+            .flat_map(|t| [t.a.y, t.b.y, t.c.y])
+            .fold(f32::INFINITY, f32::min);
+        let Ok(cams) = room.cameras(data) else {
+            continue;
+        };
+        // Start in the middle of up to four camera zones, on whatever ground
+        // is below, and run in a circle for five seconds.
+        for cam in cams.cameras.iter().take(4) {
+            let [a, b] = cam.zone_corners;
+            let mid = V3::new(
+                (a[0] + b[0]) * 0.5 * s,
+                (a[1] + b[1]) * 0.5 * s,
+                (a[2] + b[2]) * 0.5 * s,
+            );
+            let Some(g) = world.ground(mid, 1e4, 1e4) else {
+                continue;
+            };
+            let mut sim = Sim::new(Rules::original(), 3).with_world(world.clone());
+            sim.actors[PLAYER].pos = V3::new(mid.x, g.height, mid.z);
+            sim.actors[PLAYER].grounded = true;
+            let mut last_ground = sim.actors[PLAYER].pos;
+            for t in 0..300 {
+                let (x, z) = [(1, 0), (0, 1), (-1, 0), (0, -1)][(t / 40) % 4];
+                sim.step(InputFrame {
+                    buttons: 0,
+                    move_x: x * i16::MAX,
+                    move_z: z * i16::MAX,
+                });
+                let p = sim.actors[PLAYER].pos;
+                if sim.actors[PLAYER].grounded {
+                    last_ground = p;
+                }
+                assert!(
+                    p.x.is_finite() && p.y.is_finite() && p.z.is_finite(),
+                    "{name}: {p:?}"
+                );
+                if p.y < lowest - 0.5 {
+                    left.push(format!("{name}: left the mesh at {last_ground:?}"));
+                    break;
+                }
+            }
+            runs += 1;
+        }
+    }
+    // The static collision has openings the game closes by other means
+    // (doorways are props; the r200/r211 stairwell has a 1.2-unit gap
+    // between the floor and the first step, which starts 0.9 units up), and
+    // some zone centres sit on ledges the player can't normally reach. So
+    // this guards against regressions rather than demanding zero exits.
+    eprintln!("{runs} runs, {} left the mesh: {left:#?}", left.len());
+    assert!(runs > 200, "only {runs} runs");
+    assert!(
+        left.len() * 20 <= runs,
+        "more than 5% of runs left the mesh: {left:#?}"
+    );
+}

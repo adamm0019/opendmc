@@ -20,11 +20,13 @@ pub mod moves;
 pub mod rules;
 pub mod sim;
 pub mod tape;
+pub mod world;
 
 pub use input::{InputFrame, button};
 pub use math::V3;
 pub use rules::{Profile, Rules};
 pub use sim::{Event, Sim};
+pub use world::{Body, World};
 
 /// Simulation rate. Motions in the game data are keyed at this rate too.
 pub const TICK_HZ: u32 = 60;

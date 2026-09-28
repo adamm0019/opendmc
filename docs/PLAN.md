@@ -181,6 +181,16 @@ to authored cameras matches screenshots within ~1° and ~5% FOV.
   input display, count frames, and write the values into
   `data/moves/dante.ron` with a `source:` note for each.
 
+**Status: started.** `dmc_sim::world::World` holds a room's collision
+triangles in sim units (room units ÷ 450, so Dante is 2 tall) in an X/Z grid.
+It answers ground queries (steps, slopes, snapping down stairs) and pushes
+bodies out of walls. `Sim::with_world` swaps it in for the graybox floor.
+Body sizes are placeholders until measured. Tests: synthetic walls, steps,
+ledges, fast falls and replay determinism. With `OPENDMC_GAME_DIR` set, the
+player also runs on every real room: 331 runs, and 7 leave the static mesh
+through openings the game closes some other way (doorway props, a stairwell
+gap in `r200`/`r211`).
+
 ### Phase 6: Combat core *(6–10 weeks)*
 The part that decides whether the project succeeds.
 - A move table per weapon: startup, active and recovery frames, cancel windows,
