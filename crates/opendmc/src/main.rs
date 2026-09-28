@@ -1,14 +1,16 @@
 //! OpenDMC game shell.
 //!
 //! ```text
-//! opendmc [--profile original|enhanced] [--model <your model file>] [--record <tape>]
+//! opendmc [--profile original|enhanced] [--model <your model file>
+//!         [--motion <section>:<index>] [--focus]] [--record <tape>]
 //!         [--demo] [--screenshot <png> [--at-tick N]]
 //! ```
 //!
 //! Without game data it runs the graybox training room: an original capsule
 //! figure against a training dummy, driven by `dmc-sim` at a fixed 60 Hz, with
 //! fixed cameras. `--model` loads a model file from *your own* install next to
-//! the arena (static, bind pose) as the first step of the asset pipeline.
+//! the arena, skinned; `--motion` plays one of its motions and `--focus` adds
+//! a close-up view of it.
 
 mod asset_view;
 mod cameras;
@@ -23,6 +25,10 @@ use std::path::PathBuf;
 pub struct Options {
     pub enhanced: bool,
     pub model: Option<PathBuf>,
+    /// `section:index` of a motion in the model's own banks.
+    pub motion: Option<String>,
+    /// Show a close-up of the model on the right half of the window.
+    pub focus: bool,
     pub record: Option<PathBuf>,
     /// Drive the player from the built-in script (`capture::demo_input`).
     pub demo: bool,
@@ -44,6 +50,8 @@ fn parse_args() -> Result<Options, String> {
                 other => return Err(format!("unknown profile {other:?}")),
             },
             "--model" => o.model = Some(args.next().ok_or("--model needs a path")?.into()),
+            "--motion" => o.motion = Some(args.next().ok_or("--motion needs section:index")?),
+            "--focus" => o.focus = true,
             "--record" => o.record = Some(args.next().ok_or("--record needs a path")?.into()),
             "--demo" => o.demo = true,
             "--screenshot" => {
@@ -57,7 +65,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "-h" | "--help" => {
                 println!(
-                    "opendmc [--profile original|enhanced] [--model <file>] [--record <tape.odt>] \\
+                    "opendmc [--profile original|enhanced] [--model <file> [--motion <s>:<i>] [--focus]] [--record <tape.odt>] \\
                      [--demo] [--screenshot <png> [--at-tick N]]"
                 );
                 std::process::exit(0);

@@ -20,6 +20,7 @@ pub mod geometry;
 pub mod ik;
 pub mod model;
 pub mod motion;
+pub mod pose;
 pub mod texture;
 
 pub use bytes::{Endian, Reader, Writer};
