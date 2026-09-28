@@ -1,0 +1,27 @@
+/target
+**/*.rs.bk
+
+# Never commit game data or anything derived from it (see DECISIONS.md).
+/extract/
+/export/
+/game/
+/out/
+*.BDP
+*.bdp
+*.pld
+*.pws
+*.pwd
+*.emd
+*.fsd
+*.t32
+*.tm2
+*.afs
+*.pac
+*.exe
+*.dll
+*.mp4
+*.wmv
+*.bik
+*.usm
+# Inventory JSON can list file hashes; the Markdown summary is what we commit.
+inventory.json

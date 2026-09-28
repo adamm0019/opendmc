@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/dmc-formats", "crates/dmc-sim", "crates/dmc-cli", "crates/opendmc"]
+# The Bevy shell is heavy to build; `cargo test` at the root covers the pure crates.
+default-members = ["crates/dmc-formats", "crates/dmc-sim", "crates/dmc-cli"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.89"
+repository = "https://github.com/<you>/opendmc"
+
+[workspace.dependencies]
+dmc-formats = { path = "crates/dmc-formats" }
+dmc-sim = { path = "crates/dmc-sim" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ron = "0.10"
+glam = { version = "0.30", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+png = "0.17"
+walkdir = "2"
+anyhow = "1"
+
+[profile.dev.package."*"]
+opt-level = 2

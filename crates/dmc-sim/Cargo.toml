@@ -1,0 +1,12 @@
+[package]
+name = "dmc-sim"
+version = "0.1.0"
+description = "Deterministic, engine-agnostic gameplay core for OpenDMC."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+ron.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "dmc-formats"
+version = "0.1.0"
+description = "Clean-room readers for the data formats of Devil May Cry (HD Collection). Contains no game data."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true

@@ -1,0 +1,17 @@
+// Training dummy: a generic melee enemy for exercising the combat core.
+// Placeholder values; real enemies get their own files in data/enemies/.
+(
+    name: "training_dummy",
+    moves: [
+        (
+            id: "swipe",
+            total_frames: 70,
+            // Long, readable wind-up (frames 0-29), short active window.
+            hits: [(frames: (30, 34), offset: (x: 0.0, y: 1.0, z: 1.1), radius: 0.9,
+                    damage: 80, stun: 30, hitstop: 4, knockback: 6.0)],
+            motion: [(frames: (28, 33), forward: 5.0)],
+            track_frames: 24,
+            source: "placeholder",
+        ),
+    ],
+)

@@ -1,0 +1,23 @@
+[package]
+name = "dmc-cli"
+version = "0.1.0"
+description = "The `dmc` tool: inventory, extract and export from your own copy of the game."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "dmc"
+path = "src/main.rs"
+
+[dependencies]
+dmc-formats.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+gltf = "1"

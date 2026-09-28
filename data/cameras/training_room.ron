@@ -1,0 +1,27 @@
+// Fixed cameras for the graybox training room.
+//
+// A zone is an axis-aligned box on the floor plane (min/max x,z). While the
+// player stands in it, its camera is active; switching zones is a hard cut.
+// For real rooms these come from the game data if found, otherwise from the
+// `camfit` tool (docs/PLAN.md, Phase 3).
+(
+    room: "training_room",
+    zones: [
+        (
+            name: "south",
+            min: (-15.0, -15.0), max: (15.0, 0.0),
+            eye: (x: 0.0, y: 6.5, z: -16.0),
+            look_at: (x: 0.0, y: 1.0, z: -2.0),
+            fov_degrees: 50.0,
+            source: "authored",
+        ),
+        (
+            name: "north",
+            min: (-15.0, 0.0), max: (15.0, 15.0),
+            eye: (x: 11.0, y: 8.0, z: 16.0),
+            look_at: (x: 0.0, y: 1.0, z: 5.0),
+            fov_degrees: 45.0,
+            source: "authored",
+        ),
+    ],
+)

@@ -1,0 +1,103 @@
+// Player melee move set: sword.
+//
+// EVERY value here is a placeholder with plausible shape, not a measurement.
+// The Phase 5/6 workflow replaces each move's numbers with frame counts taken
+// from 60 fps captures of the original and records how in `source`, e.g.
+//   source: "capture 2026-10-04 m02-room3 ground-combo, frames 118-161, 3 takes"
+//
+// Frames are 1/60 s ticks from the move's first frame (0).
+// Offsets are x right, y up, z forward, relative to the character's feet.
+(
+    name: "player_sword",
+    moves: [
+        // --- Ground combo -----------------------------------------------
+        (
+            id: "combo_1",
+            trigger: Some((button: Melee, stance: Ground)),
+            total_frames: 30,
+            hits: [(frames: (8, 11), offset: (x: 0.3, y: 1.0, z: 1.2), radius: 0.9,
+                    damage: 40, stun: 20, hitstop: 3, knockback: 2.0, style: 12, dt_gain: 40)],
+            combo: Some((button: Melee, input: (4, 24), link_frame: 14, next: "combo_2")),
+            cancels: [(frames: (16, 29), into: Movement), (frames: (12, 29), into: Jump)],
+            motion: [(frames: (4, 9), forward: 3.0)],
+            track_frames: 6,
+            source: "placeholder",
+        ),
+        (
+            id: "combo_2",
+            total_frames: 32,
+            hits: [(frames: (7, 10), offset: (x: -0.3, y: 1.0, z: 1.2), radius: 0.9,
+                    damage: 40, stun: 20, hitstop: 3, knockback: 2.0, style: 12, dt_gain: 40)],
+            combo: Some((button: Melee, input: (4, 26), link_frame: 15, next: "combo_3")),
+            cancels: [(frames: (18, 31), into: Movement), (frames: (12, 31), into: Jump)],
+            motion: [(frames: (3, 8), forward: 3.0)],
+            track_frames: 5,
+            source: "placeholder",
+        ),
+        (
+            id: "combo_3",
+            total_frames: 44,
+            hits: [(frames: (10, 14), offset: (x: 0.0, y: 1.0, z: 1.4), radius: 1.1,
+                    damage: 70, stun: 36, hitstop: 6, knockback: 9.0, style: 25, dt_gain: 70)],
+            cancels: [(frames: (30, 43), into: Movement)],
+            motion: [(frames: (5, 12), forward: 4.5)],
+            track_frames: 8,
+            source: "placeholder",
+        ),
+
+        // --- Command moves (lock-on + direction + melee) ----------------
+        (
+            id: "lunge",
+            trigger: Some((button: Melee, stance: Ground, direction: Forward, lock_on: true)),
+            total_frames: 40,
+            hits: [(frames: (6, 20), offset: (x: 0.0, y: 1.0, z: 1.3), radius: 0.8,
+                    damage: 60, stun: 30, hitstop: 5, knockback: 12.0, style: 30, dt_gain: 60)],
+            cancels: [(frames: (26, 39), into: AnyMove), (frames: (22, 39), into: Jump)],
+            motion: [(frames: (4, 20), forward: 22.0)],
+            track_frames: 4,
+            source: "placeholder",
+        ),
+        (
+            id: "launcher",
+            trigger: Some((button: Melee, stance: Ground, direction: Back, lock_on: true)),
+            total_frames: 38,
+            hits: [(frames: (9, 13), offset: (x: 0.0, y: 1.2, z: 1.1), radius: 1.0,
+                    damage: 45, stun: 50, hitstop: 4, knockback: 0.5, lift: 8.0, style: 30, dt_gain: 50)],
+            cancels: [(frames: (14, 30), into: Jump), (frames: (28, 37), into: Movement)],
+            track_frames: 6,
+            source: "placeholder",
+        ),
+
+        // --- Air -------------------------------------------------------
+        (
+            id: "air_1",
+            trigger: Some((button: Melee, stance: Air)),
+            total_frames: 24,
+            hits: [(frames: (5, 8), offset: (x: 0.0, y: 0.9, z: 1.2), radius: 1.0,
+                    damage: 30, stun: 24, hitstop: 3, lift: 4.0, style: 15, dt_gain: 30)],
+            combo: Some((button: Melee, input: (3, 20), link_frame: 11, next: "air_2")),
+            gravity_scale: 0.15,
+            track_frames: 4,
+            source: "placeholder",
+        ),
+        (
+            id: "air_2",
+            total_frames: 30,
+            hits: [(frames: (6, 10), offset: (x: 0.0, y: 0.6, z: 1.3), radius: 1.1,
+                    damage: 50, stun: 30, hitstop: 5, knockback: 6.0, lift: -8.0, style: 20, dt_gain: 40)],
+            gravity_scale: 0.3,
+            track_frames: 4,
+            source: "placeholder",
+        ),
+        (
+            id: "plunge",
+            trigger: Some((button: Melee, stance: Air, direction: Forward, lock_on: true)),
+            total_frames: 36,
+            hits: [(frames: (4, 20), offset: (x: 0.0, y: 0.3, z: 0.9), radius: 1.2,
+                    damage: 80, stun: 40, hitstop: 6, lift: -12.0, style: 30, dt_gain: 60)],
+            motion: [(frames: (0, 0), vertical: Some(4.0)), (frames: (4, 4), vertical: Some(-28.0))],
+            gravity_scale: 1.0,
+            source: "placeholder",
+        ),
+    ],
+)
