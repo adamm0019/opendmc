@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! opendmc [--profile original|enhanced] [--model <your model file>
-//!         [--motion <section>:<index>] [--focus]] [--record <tape>]
+//!         [--motion <section>:<index>] [--focus]] [--room <your .fsd>] [--record <tape>]
 //!         [--demo] [--screenshot <png> [--at-tick N]]
 //! ```
 //!
@@ -16,6 +16,7 @@ mod asset_view;
 mod cameras;
 mod capture;
 mod play;
+mod room_view;
 
 use bevy::prelude::*;
 use dmc_sim::Rules;
@@ -31,6 +32,8 @@ pub struct Options {
     pub focus: bool,
     /// `section[:first]`: show 24 motions of a bank side by side.
     pub grid: Option<String>,
+    /// A room file (`.fsd`) from your own install.
+    pub room: Option<PathBuf>,
     pub record: Option<PathBuf>,
     /// Drive the player from the built-in script (`capture::demo_input`).
     pub demo: bool,
@@ -54,6 +57,7 @@ fn parse_args() -> Result<Options, String> {
             "--model" => o.model = Some(args.next().ok_or("--model needs a path")?.into()),
             "--motion" => o.motion = Some(args.next().ok_or("--motion needs section:index")?),
             "--focus" => o.focus = true,
+            "--room" => o.room = Some(args.next().ok_or("--room needs a path")?.into()),
             "--grid" => o.grid = Some(args.next().ok_or("--grid needs section[:first]")?),
             "--record" => o.record = Some(args.next().ok_or("--record needs a path")?.into()),
             "--demo" => o.demo = true,
@@ -68,7 +72,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "-h" | "--help" => {
                 println!(
-                    "opendmc [--profile original|enhanced] [--model <file> [--motion <s>:<i>] [--focus]] [--record <tape.odt>] \\
+                    "opendmc [--profile original|enhanced] [--model <file> [--motion <s>:<i>] [--focus]] [--room <file.fsd>] [--record <tape.odt>] \\
                      [--demo] [--screenshot <png> [--at-tick N]]"
                 );
                 std::process::exit(0);
@@ -100,6 +104,7 @@ fn main() {
         .insert_resource(options)
         .add_plugins(play::PlayPlugin { rules })
         .add_plugins(asset_view::AssetViewPlugin)
+        .add_plugins(room_view::RoomViewPlugin)
         .add_plugins(capture::CapturePlugin)
         .run();
 }
