@@ -272,6 +272,7 @@ fn pc_room() -> Vec<u8> {
         min: [0., 0., -1.],
         max: [11., 1500., 1.],
         fov: 55.0,
+        eye: [5., 2000., -1500.],
         rails: vec![],
     }]);
     room::build_sections(&[

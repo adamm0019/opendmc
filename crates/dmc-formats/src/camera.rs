@@ -1,6 +1,7 @@
 //! Room cameras (`.fsd` section 2, PC build, version 2 records): an
-//! activation zone per camera, a look-at offset, a field of view, and
-//! optional rails for the eye and the look-at point.
+//! activation zone per camera, the eye, a look-at offset, a field of view,
+//! and optional rails: one the eye moves along and one that follows the
+//! player's path and sets how far along its rail the eye is.
 //! Layout and evidence: `docs/formats/README.md` §4e. What each field means
 //! is partly inferred; the uncertain ones are kept raw.
 
@@ -28,29 +29,35 @@ pub struct Camera {
     /// Added to the player's position to get the point looked at; usually
     /// `(0, 900, 0)`, the player's head height.
     pub look_offset: [f32; 3],
-    /// The last point of the look-at rail (+0x90).
-    pub look_end: [f32; 3],
-    /// The last point of the eye rail (+0xA0).
-    pub eye_end: [f32; 3],
+    /// The eye (+0x90): where a camera without rails views from, and the
+    /// last point of the eye rail of one with rails.
+    pub eye: [f32; 3],
+    /// The last point of the track rail (+0xA0).
+    pub track_end: [f32; 3],
     /// An unexplained point (+0xC0).
     pub extra_point: [f32; 3],
     /// One byte per room object, mostly `0x01`, some `0xFF` (hidden while
     /// this camera is active? unconfirmed).
     pub object_flags: Vec<u8>,
-    /// Eight type bytes at +0x150 (meaning unknown).
+    /// Eight type bytes at +0x150. Bytes 4 and 5 are the point counts of
+    /// the eye and track rails (also set on some records without rails);
+    /// the rest are unknown.
     pub kind: [u8; 8],
     /// Flags at +0x158; see [`HAS_RAILS`].
     pub flags: u32,
     /// Field of view in degrees, probably (55 in most records).
     pub fov: f32,
-    /// The stored arc lengths of the look-at and eye rails.
+    /// The stored arc lengths of the eye and track rails.
     pub rail_lengths: [f32; 2],
     /// Four i32 at +0x190, usually −1 (links to other cameras?).
     pub links: [i32; 4],
-    /// Look-at rail: points with a fourth component (small, meaning unknown).
-    pub look_rail: Vec<[f32; 4]>,
-    /// Eye rail, one point per look-at rail point.
-    pub eye_rail: Vec<[f32; 3]>,
+    /// Eye rail: the points the eye moves along, each with a fourth
+    /// component (−0.65 to 1.12, median ≈ 0; meaning unknown).
+    pub eye_rail: Vec<[f32; 4]>,
+    /// Track rail, one point per eye-rail point: runs near the player's path
+    /// at about chest height. The player's nearest point on it, as a fraction
+    /// of its length, is (probably) how far along the eye rail the eye is.
+    pub track_rail: Vec<[f32; 3]>,
 }
 
 impl Camera {
@@ -89,7 +96,7 @@ impl Cameras {
         for i in 0..count {
             let camera = parse_record(&r, at)
                 .map_err(|e| FormatError::invalid("cameras", format!("record {i}: {e}")))?;
-            at += RECORD + 16 * (camera.look_rail.len() + camera.eye_rail.len());
+            at += RECORD + 16 * (camera.eye_rail.len() + camera.track_rail.len());
             cameras.push(camera);
         }
         if at != section.len() {
@@ -107,7 +114,7 @@ fn parse_record(r: &Reader, o: usize) -> Result<Camera> {
     let vec3 = |at: usize| r.vec3(o + at);
     let flags = r.u32(o + 0x158)?;
     let points = r.u32(o + 0x15C)? as usize;
-    let (look_rail, eye_rail) = if flags & HAS_RAILS != 0 {
+    let (eye_rail, track_rail) = if flags & HAS_RAILS != 0 {
         if !points.is_multiple_of(2) || points > MAX_RAIL_POINTS {
             return Err(FormatError::invalid(
                 "camera",
@@ -117,16 +124,16 @@ fn parse_record(r: &Reader, o: usize) -> Result<Camera> {
         let base = o + RECORD;
         r.bytes(base, 16 * points)?;
         let half = points / 2;
-        let look = (0..half)
+        let eye = (0..half)
             .map(|k| {
                 let p = r.vec3(base + 16 * k)?;
                 Ok([p[0], p[1], p[2], r.f32(base + 16 * k + 12)?])
             })
             .collect::<Result<_>>()?;
-        let eye = (half..points)
+        let track = (half..points)
             .map(|k| r.vec3(base + 16 * k))
             .collect::<Result<_>>()?;
-        (look, eye)
+        (eye, track)
     } else {
         (Vec::new(), Vec::new())
     };
@@ -141,8 +148,8 @@ fn parse_record(r: &Reader, o: usize) -> Result<Camera> {
             vec3(0x70)?,
         ],
         look_offset: vec3(0x80)?,
-        look_end: vec3(0x90)?,
-        eye_end: vec3(0xA0)?,
+        eye: vec3(0x90)?,
+        track_end: vec3(0xA0)?,
         extra_point: vec3(0xC0)?,
         object_flags: r.bytes(o + 0xD0, OBJECT_FLAGS)?.to_vec(),
         kind: r.bytes(o + 0x150, 8)?.try_into().unwrap(),
@@ -150,20 +157,21 @@ fn parse_record(r: &Reader, o: usize) -> Result<Camera> {
         fov: r.f32(o + 0x180)?,
         rail_lengths: [r.f32(o + 0x168)?, r.f32(o + 0x16C)?],
         links: std::array::from_fn(|k| r.u32(o + 0x190 + 4 * k).unwrap_or(0) as i32),
-        look_rail,
         eye_rail,
+        track_rail,
     })
 }
 
 // ---------------------------------------------------------------- writer
 
 /// A camera for [`build`]: an axis-aligned zone between `min` and `max`,
-/// and optional rails.
+/// an eye (the last rail point if there are rails), and optional rails.
 pub struct NewCamera {
     pub min: [f32; 3],
     pub max: [f32; 3],
     pub fov: f32,
-    /// `(look, eye)` pairs.
+    pub eye: [f32; 3],
+    /// `(eye, track)` point pairs.
     pub rails: Vec<([f32; 3], [f32; 3])>,
 }
 
@@ -190,9 +198,9 @@ pub fn build(cameras: &[NewCamera]) -> Vec<u8> {
             point(&mut w, n, 0.0);
         }
         point(&mut w, [0., 900., 0.], 1.0);
-        let (look_end, eye_end) = c.rails.last().copied().unwrap_or_default();
-        point(&mut w, look_end, 1.0);
-        point(&mut w, eye_end, 1.0);
+        let (eye, track_end) = c.rails.last().copied().unwrap_or((c.eye, [0.0; 3]));
+        point(&mut w, eye, 1.0);
+        point(&mut w, track_end, 1.0);
         w.zeros(16);
         point(&mut w, [0.0; 3], 1.0);
         w.bytes(&[1; OBJECT_FLAGS]);
@@ -218,11 +226,11 @@ pub fn build(cameras: &[NewCamera]) -> Vec<u8> {
             w.u32(u32::MAX);
         }
         w.zeros(start + RECORD - w.pos());
-        for (look, _) in &c.rails {
-            point(&mut w, *look, 0.0);
+        for (eye, _) in &c.rails {
+            point(&mut w, *eye, 0.0);
         }
-        for (_, eye) in &c.rails {
-            point(&mut w, *eye, 1.0);
+        for (_, track) in &c.rails {
+            point(&mut w, *track, 1.0);
         }
     }
     w.finish()
@@ -238,16 +246,18 @@ mod tests {
                 min: [0., 0., 0.],
                 max: [1000., 1500., 2000.],
                 fov: 55.0,
+                eye: [500., 2500., -800.],
                 rails: vec![],
             },
             NewCamera {
                 min: [-500., 0., 0.],
                 max: [0., 1500., 1000.],
                 fov: 42.5,
+                eye: [0.0; 3],
                 rails: vec![
-                    ([0., 900., 0.], [0., 2000., -1000.]),
-                    ([0., 900., 300.], [0., 2000., -600.]),
-                    ([400., 900., 300.], [300., 2000., -600.]),
+                    ([0., 2000., -1000.], [0., 700., 0.]),
+                    ([0., 2000., -600.], [0., 700., 300.]),
+                    ([300., 2000., -600.], [400., 700., 300.]),
                 ],
             },
         ]
@@ -260,16 +270,18 @@ mod tests {
         assert_eq!(c.cameras.len(), 2);
         let fixed = &c.cameras[0];
         assert_eq!((fixed.fov, fixed.flags & HAS_RAILS), (55.0, 0));
-        assert!(fixed.look_rail.is_empty());
+        assert!(fixed.eye_rail.is_empty());
+        assert_eq!(fixed.eye, [500., 2500., -800.]);
         assert_eq!(fixed.look_offset, [0., 900., 0.]);
         assert_eq!(fixed.links, [-1; 4]);
         assert!(fixed.zone_contains([500., 100., 1000.], 0.0));
         assert!(!fixed.zone_contains([500., 100., 2100.], 0.0));
         assert!(!fixed.zone_contains([-1., 100., 1000.], 0.0));
         let rail = &c.cameras[1];
-        assert_eq!((rail.look_rail.len(), rail.eye_rail.len()), (3, 3));
-        assert_eq!(rail.eye_rail[2], [300., 2000., -600.]);
-        assert_eq!(rail.eye_end, [300., 2000., -600.]);
+        assert_eq!((rail.eye_rail.len(), rail.track_rail.len()), (3, 3));
+        assert_eq!(rail.track_rail[2], [400., 700., 300.]);
+        assert_eq!(rail.eye, [300., 2000., -600.]);
+        assert_eq!(rail.track_end, [400., 700., 300.]);
         assert_eq!(rail.rail_lengths, [700.0, 700.0]);
         assert_eq!(rail.object_flags.len(), 128);
     }
