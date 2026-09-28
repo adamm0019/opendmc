@@ -131,7 +131,9 @@ container type has a coverage status.
   to glTF (`dmc export`, `dmc room`).
 - Collision: `.fsd` section 9, parsed for all 106 rooms (`dmc room` writes
   it beside each room). Cameras: `.fsd` section 2, parsed for 97 rooms:
-  activation zones, rails and FOV; behaviour still to confirm in-game.
+  activation zones, eye and rails, FOV. Which point is the eye was tested
+  against the data (the player stays in view); blending is still to confirm
+  in-game.
   Triggers: not located yet. Cutscene/event data: `.fsd` section 30. Audio: FMOD banks.
   Video: WMV.
 

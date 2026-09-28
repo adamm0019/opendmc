@@ -226,7 +226,9 @@ Two differences beyond widening:
   count from the **skeleton header**, not from the section.
 
 Per-vertex encodings (positions, normals, UVs, bone bytes, weight words) are
-unchanged.
+unchanged, except that V is used as stored rather than flipped: the DDS
+images are top-down, and with the flip Dante's hair samples the skin region
+of his atlas (checked by eye).
 
 ## 4b. Room geometry (`.fsd` section 14): `PC-verified`
 
@@ -283,7 +285,7 @@ mesh descriptor (32 bytes), fields in 16-byte units from the descriptor:
 arrays (each padded to 16 with 0xCD):
     pos    f32×3 per vertex
     nrm    f32×3 per vertex
-    uv     i16×2 per vertex, /4096 (as §4)
+    uv     i16×2 per vertex, /4096; V is flipped for sampling (1 − v)
     colour 4 bytes per vertex: flags, then three colour bytes
 ```
 
@@ -300,6 +302,10 @@ Checked on 30 rooms (5,645 meshes): the first two vertices of every mesh have
 bit 1 set, and the winding bit agrees with the vertex normals on 99.4% of 450k
 triangles. The rest are probably curved surfaces, where the smoothed normals
 disagree with the flat face.
+
+**Texture V.** Room UVs sample correctly with V flipped (`1 − v`), unlike
+the PC character models (§4.2), which use V as stored. Evidence: the
+lettering on the rug in `r002` reads the right way round only with the flip.
 
 The three colour bytes are vertex lighting. About a third of meshes are
 grey; the rest are coloured, and the first byte runs lower than the other
@@ -325,7 +331,7 @@ rooms (62 distinct sets of non-empty sections):
 | 15 | 0x30 | a permutation of 0..0x20 (draw or object order?); always 0x30 |
 | 17 | 0x400C90 | texture container: 8 × 512² DXT5 |
 | 18 | 0x14D0 | offset pack (§9), same shape as `Etc/effcom.anm` |
-| 19 | 0x22F80 | 0 to 5.9 MB; same header shape as `Etc/def_efm.omd` (effect models?) |
+| 19 | 0x22F80 | 0 to 11 MB. **Room props**: `u32 count`, `u32 headerSize` (0x80 in `r100`), then 28-byte entries of seven `u32` (two offsets, four −1 slots, a size-like 0x9680; entries with the top bit set, e.g. `0x80000014`, look like references). The payloads start with §4.2 `Pc64` geometry headers (`r100`: 4 props, probably the chandeliers and other movable pieces). Not parsed yet |
 | 22–29 | ~0x5B0–0xCE0 | offset/size packs (§9) of messages in the same glyph encoding as `.msg`. Probably the room's text in several languages |
 | 30 | 0x206470 | **event package**: a `PLAYER DATA` block, then fixed 64-byte path records naming the enemy models used (`../data/emd/em20.emd`), the room's event scripts (`../event/stage0/r0020107.ecd`, …) and per-enemy motion curves (`../event/motion/em20/em200107.fcv`, …) |
 | 34 | 0x372A10 | texture container used by the geometry (`texCount` images) |
@@ -419,17 +425,17 @@ exactly. Offsets are from the record start:
 | 0x10 | f32×4 B (w = 1) | opposite zone corner |
 | 0x20 | 6 × f32×4 (w = 0) | outward unit normals of the zone's faces: faces 0–2 pass through B, faces 3–5 through A. The zone is the convex hexahedron they bound |
 | 0x80 | f32×4 | look-at offset, usually `(0, 900, 0)`: Dante's head height (Dante ≈ 900 units tall) |
-| 0x90 | f32×4 | equals the last point of the look-at rail |
-| 0xA0 | f32×4 | equals the last point of the eye rail |
+| 0x90 | f32×4 | the eye: where a camera without rails views from; equals the last point of the eye rail |
+| 0xA0 | f32×4 | equals the last point of the track rail |
 | 0xC0 | f32×4 | unknown point |
 | 0xD0 | u8[128] | mostly `0x01`, some `0xFF`: per-object flags? (hiding objects that block the view is a guess) |
-| 0x150 | u8[8] | type bytes, e.g. `00 00 00 01 02 02 6e 00` (unknown) |
+| 0x150 | u8[8] | type bytes, e.g. `00 00 00 01 02 02 6e 00`. Bytes 4 and 5 are the point counts of the eye and track rails (all 1,181 rail records; 310 records without rails carry counts too). The rest are unknown |
 | 0x158 | u32 flags | `0x10`: the record ends with rails |
 | 0x15C | u32 n | rail point count (both rails together) |
-| 0x168 | f32, f32 | arc lengths of the look-at and eye rails; they match the points exactly |
+| 0x168 | f32, f32 | arc lengths of the eye and track rails; they match the points exactly |
 | 0x180 | f32 | 55.0 in 44 of 53 `r100` records (also 54.6, 49.7, 42.6, 39.9, 25.1): the field of view in degrees, probably |
 | 0x190 | i32×4 | usually −1 (links to other cameras?) |
-| 0x220 | n × f32×4 | the look-at rail (n/2 points, small fourth component), then the eye rail (n/2 points, w = 1) |
+| 0x220 | n × f32×4 | the eye rail (n/2 points; fourth component −0.65 to 1.12, median ≈ 0, unknown), then the track rail (n/2 points, w = 1) |
 
 Evidence for the zone reading: in 1,574 of 1,575 records, A and B lie on
 the zone's boundary. Across the 97 rooms, 87% of floor collision polygons
@@ -437,14 +443,49 @@ the zone's boundary. Across the 97 rooms, 87% of floor collision polygons
 Arbitrary boxes would not cover the walkable floor like that. The rest are
 probably floors the player can't reach (tops of props, ledges).
 
-Evidence for the rails: rendering `r100` record 1 from each eye-rail point
-towards the matching look-at point gives a coherent low tracking shot
-along the hall floor.
+Evidence for which point is the eye. An earlier reading of these notes had
+the two rails the other way round. It was tested against the data as
+follows:
+- Floor points were sampled inside each camera's zone (5×5 grid, lowest
+  collision floor within the zone's height). This gives 22,803 samples
+  under the 1,181 rail cameras and 5,678 under the others, in 97 rooms.
+- A 900-unit player was placed at each sample, and the check was whether
+  its middle falls inside the view (vertical FOV, 4:3).
 
-Still to confirm against the running game: how the player's position picks
-a point on the rails, what the non-rail records do (fixed or tracking
-cameras), whether the FOV is vertical or horizontal, and what the type bytes
-and object flags mean.
+| Reading | Player in view | Median eye distance |
+|---|---|---|
+| eye on the **first** rail, aimed at the player's head | 99.7% | 4,794 |
+| eye on the first rail, aimed at the matching track point | 83.0% | 4,383 |
+| eye on the second rail, aimed at the player's head | 87.5%\* | 2,474 |
+| eye on the second rail, aimed at the matching first-rail point | 3.3%\* | — |
+| no rails: eye at **+0x90**, aimed at the player | 99.5% | 4,761 |
+| no rails: eye at +0xA0, aimed at the player | 94.2% | 4,616 |
+| no rails: eye at +0x90, aimed at +0xA0 (never turning) | 49.8% | — |
+
+\* first 12 rooms only.
+
+Every variant here takes the fraction from the player's nearest point on
+the track rail. Nearest in 3D versus in XZ, and by arc length versus by
+segment index, all score within 1.5% of each other. The track rail runs
+near the player's path at about chest height: the player's head is a median
+1,593 units from it (90th percentile 4,612).
+
+So, provisionally:
+- The eye moves along the first rail. Its position on that rail is the
+  fraction of the track rail's length at which the player's nearest track
+  point lies.
+- Cameras without rails stay at +0x90.
+- Both kinds turn to keep the player in view.
+
+Aiming at the matching track point, not at the player, loses the player in
+17% of samples. Whatever the original aims at, it stays close to the
+player.
+
+Still to confirm against the running game:
+- how the original blends between cameras;
+- what the eye rail's fourth component, the +0xC0 point, the other type
+  bytes and the object flags mean;
+- whether the FOV is vertical or horizontal.
 
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 
