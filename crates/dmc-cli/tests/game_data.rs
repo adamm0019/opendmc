@@ -42,6 +42,17 @@ fn every_room_parses() {
     };
     assert_eq!(rooms.len(), 106);
     let (mut cameras, mut polys, mut props, mut unit_normals) = (0, 0, 0, 0);
+    let names: std::collections::HashSet<String> = rooms
+        .iter()
+        .map(|(n, _)| {
+            n.rsplit('/')
+                .next()
+                .unwrap()
+                .trim_end_matches(".fsd")
+                .to_lowercase()
+        })
+        .collect();
+    let (mut doors, mut door_targets) = (0, 0);
     for (name, data) in &rooms {
         let room = Room::parse(data).unwrap_or_else(|e| panic!("{name}: {e}"));
         polys += room
@@ -51,6 +62,12 @@ fn every_room_parses() {
             .len();
         if let Ok(c) = room.cameras(data) {
             cameras += c.cameras.len();
+        }
+        if let Ok(t) = room.triggers(data) {
+            for (_, d) in t.doors() {
+                doors += 1;
+                door_targets += names.contains(&dmc_formats::triggers::room_name(d.room)) as usize;
+            }
         }
         if let Some(section) = room.section(data, dmc_formats::props::SECTION) {
             let table = room.props(data).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -70,6 +87,8 @@ fn every_room_parses() {
     }
     assert_eq!(polys, 62_614);
     assert_eq!(cameras, 1_575);
+    // Four doors name rooms that are not in the archive (r00f, r105, r20a).
+    assert_eq!((doors, door_targets), (220, 216));
     assert_eq!(props, 1_190);
     // Read with the right layout, normals are unit length. The exceptions
     // are one 112-vertex model (three copies each in r408 and r40b).
