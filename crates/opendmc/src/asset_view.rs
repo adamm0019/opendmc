@@ -9,6 +9,7 @@
 use crate::Options;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::Viewport;
+use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
@@ -22,7 +23,7 @@ pub struct AssetViewPlugin;
 
 impl Plugin for AssetViewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_model)
+        app.add_systems(Startup, load_model.after(crate::room_view::load_room))
             .add_systems(Update, animate);
     }
 }
@@ -113,6 +114,8 @@ struct Parts {
     /// Model-space offset that centres the model and puts its feet at 0.
     origin: Vec3,
     scale: f32,
+    /// Render layers for the meshes (`None`: the default layer).
+    layers: Option<RenderLayers>,
 }
 
 /// Motions shown by `--grid`, per screenshot page.
@@ -131,6 +134,7 @@ fn load_model(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
     windows: Query<&Window>,
+    room: Option<Res<crate::room_view::RoomSpot>>,
 ) {
     let Some(path) = &options.model else { return };
     let data = match std::fs::read(path) {
@@ -176,6 +180,7 @@ fn load_model(
         }),
         skeleton,
         origin: Vec3::new((lo.x + hi.x) / 2.0, lo.y, (lo.z + hi.z) / 2.0),
+        layers: None,
         scale: PREVIEW_HEIGHT / (hi.y - lo.y).max(1e-3),
     };
     for m in geo.objects.iter().flat_map(|o| &o.meshes) {
@@ -281,7 +286,27 @@ fn load_model(
             .as_ref()
             .map_or("none".into(), |m| format!("{} frames", m.frames))
     );
-    spawn_instance(&mut commands, &parts, ANCHOR, motion);
+    match room {
+        // In a room: true scale, standing on its floor, on its render layer.
+        Some(spot) => {
+            let in_room = Parts {
+                origin: Vec3::ZERO,
+                scale: crate::room_view::ROOM_SCALE,
+                layers: Some(crate::room_view::room_layer()),
+                ..parts
+            };
+            let root = spawn_instance(&mut commands, &in_room, spot.position, motion);
+            commands.entity(root).insert(
+                Transform::from_translation(spot.position)
+                    .with_rotation(spot.facing)
+                    .with_scale(Vec3::splat(in_room.scale)),
+            );
+            return;
+        }
+        None => {
+            spawn_instance(&mut commands, &parts, ANCHOR, motion);
+        }
+    }
 
     if options.focus {
         let centre = ANCHOR + Vec3::Y * PREVIEW_HEIGHT * 0.5;
@@ -303,7 +328,13 @@ fn load_model(
 }
 
 /// One copy of the model standing at `at`, with its own joints.
-fn spawn_instance(commands: &mut Commands, parts: &Parts, at: Vec3, motion: Option<Motion>) {
+/// Returns the instance's root entity.
+fn spawn_instance(
+    commands: &mut Commands,
+    parts: &Parts,
+    at: Vec3,
+    motion: Option<Motion>,
+) -> Entity {
     let root = commands
         .spawn((
             Transform::from_translation(at - parts.origin * parts.scale)
@@ -338,6 +369,9 @@ fn spawn_instance(commands: &mut Commands, parts: &Parts, at: Vec3, motion: Opti
             MeshMaterial3d(material.clone()),
             ChildOf(root),
         ));
+        if let Some(layers) = &parts.layers {
+            child.insert(layers.clone());
+        }
         if let Some(inverse_bindposes) = &parts.inverse_bindposes {
             child.insert(SkinnedMesh {
                 inverse_bindposes: inverse_bindposes.clone(),
@@ -352,6 +386,7 @@ fn spawn_instance(commands: &mut Commands, parts: &Parts, at: Vec3, motion: Opti
             motion,
         });
     }
+    root
 }
 
 fn animate(

@@ -33,12 +33,24 @@ const ROOM_LAYER: usize = 1;
 /// Eye height above the floor, in sim units (the figure is 2 tall).
 const EYE_HEIGHT: f32 = 1.7;
 
+/// Where a model loaded alongside the room should stand: on the floor in
+/// front of the start camera, at room scale, on the room's render layer.
+#[derive(Resource, Clone, Copy)]
+pub struct RoomSpot {
+    pub position: Vec3,
+    pub facing: Quat,
+}
+
+pub fn room_layer() -> RenderLayers {
+    RenderLayers::layer(ROOM_LAYER)
+}
+
 #[derive(Component)]
 struct FlyCamera {
     yaw: f32,
 }
 
-fn load_room(
+pub fn load_room(
     options: Res<Options>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -187,6 +199,22 @@ fn load_room(
     let (x, z0, z1) = (pct(0, 0.5), pct(2, 0.1), pct(2, 0.9));
     let eye = at(x, floor, z1) + Vec3::Y * EYE_HEIGHT;
     let target = at(x, floor, z0) + Vec3::Y * EYE_HEIGHT * 0.6;
+    let spot = at(x, floor, z1 + (z0 - z1) * 0.25);
+    commands.insert_resource(RoomSpot {
+        position: spot,
+        // Models face +Z natively, which is towards the camera here.
+        facing: Quat::IDENTITY,
+    });
+    // Lights respect render layers too. The room itself is unlit (its
+    // lighting is baked into vertex colours); this lights models in it.
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 6000.0,
+            ..default()
+        },
+        Transform::from_translation(eye + Vec3::new(2.0, 4.0, 0.0)).looking_at(spot, Vec3::Y),
+        RenderLayers::layer(ROOM_LAYER),
+    ));
     let look = Transform::from_translation(eye).looking_at(target, Vec3::Y);
     let (yaw, _, _) = look.rotation.to_euler(EulerRot::YXZ);
     commands.spawn((
