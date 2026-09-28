@@ -3,6 +3,7 @@
 //! Layout: `docs/formats/README.md` §3.2, §4b and §4c.
 
 use crate::bytes::{Endian, Reader, Writer};
+use crate::camera::{self, Cameras};
 use crate::collision::{self, Collision};
 use crate::error::{FormatError, Result};
 use crate::geometry::PC_PAD;
@@ -260,6 +261,14 @@ impl Room {
         self.file.section(data, index)
     }
 
+    /// The cameras of section 2 (version 2 records only).
+    pub fn cameras(&self, data: &[u8]) -> Result<Cameras> {
+        let section = self
+            .section(data, camera::SECTION)
+            .ok_or_else(|| FormatError::invalid("room", "camera section is empty"))?;
+        Cameras::parse(section)
+    }
+
     /// The collision tree and polygons of section 9.
     pub fn collision(&self, data: &[u8]) -> Result<Collision> {
         let section = self
@@ -368,16 +377,21 @@ pub fn build(geometry: &[u8], textures: Option<&[u8]>) -> Vec<u8> {
 
 /// [`build`], plus a collision section (section 9) when given.
 pub fn build_with(geometry: &[u8], textures: Option<&[u8]>, collision: Option<&[u8]>) -> Vec<u8> {
+    build_sections(&[
+        (collision::SECTION, collision),
+        (GEOMETRY_SECTION, Some(geometry)),
+        (TEXTURE_SECTION, textures),
+    ])
+}
+
+/// A room file with the given `(section, bytes)` payloads (fixtures).
+pub fn build_sections(sections: &[(usize, Option<&[u8]>)]) -> Vec<u8> {
     let mut w = Writer::new(Endian::Little);
     w.u32(SECTION_COUNT as u32).bytes(&[PC_PAD; 4]);
     let table = w.pos();
     w.zeros(SECTION_COUNT * 8);
     w.pad_to(UNIT, 0);
-    for (index, payload) in [
-        (collision::SECTION, collision),
-        (GEOMETRY_SECTION, Some(geometry)),
-        (TEXTURE_SECTION, textures),
-    ] {
+    for &(index, payload) in sections {
         let Some(payload) = payload else { continue };
         let at = w.pos();
         w.set_u64(table + 8 * index, at as u64);

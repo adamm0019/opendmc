@@ -51,7 +51,7 @@ the checks named in each row.
 | Object culling tree | `.fsd` section 9 (after collision) | — | partly understood | 40-byte records repeating the objects' i16 bounds (§4c) |
 | Lighting | `.fsd` sections 4, 5 | — | unknown | float colours and positions in 3,168-byte blocks (§4c) |
 | Door / entry points | `.fsd` section 3? | — | unknown | 63 fixed slots of floor point + facing; not cameras (§4c) |
-| Cameras | `.fsd` section 2 | — (Python prototype) | partly understood | record walk exact in 97/98 rooms; zone planes, rail paths with matching arc lengths, FOV 55° (§4e) |
+| Cameras | `.fsd` section 2 | `dmc_formats::camera` | partly understood | 97/98 rooms parse (1,575 cameras; `r503` uses an older layout); zones cover 87% of floor collision; rail arc lengths match; behaviour still to confirm in-game (§4e) |
 | Triggers / areas | ? | — | unknown | not located |
 | Event package (cutscene actors, `.ecd` scripts, `.fcv` curves) | `.fsd` section 30 | — | partly understood | path records read in `r002` (§4c) |
 | Room text | `.fsd` sections 22–29 | — | partly understood | offset/size packs of messages (§4c) |

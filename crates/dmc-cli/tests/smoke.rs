@@ -268,7 +268,18 @@ fn pc_room() -> Vec<u8> {
         flags: dmc_formats::collision::surface::GROUND_A,
         normal: [0.0, 1.0, 0.0],
     }]);
-    room::build_with(&geometry, Some(&textures), Some(&collision))
+    let cameras = dmc_formats::camera::build(&[dmc_formats::camera::NewCamera {
+        min: [0., 0., -1.],
+        max: [11., 1500., 1.],
+        fov: 55.0,
+        rails: vec![],
+    }]);
+    room::build_sections(&[
+        (dmc_formats::camera::SECTION, Some(&cameras)),
+        (dmc_formats::collision::SECTION, Some(&collision)),
+        (room::GEOMETRY_SECTION, Some(&geometry)),
+        (room::TEXTURE_SECTION, Some(&textures)),
+    ])
 }
 
 #[test]

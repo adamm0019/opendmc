@@ -32,6 +32,9 @@ pub struct RoomStats {
     pub bounds_ok: usize,
     /// Collision polygons (section 9); 0 when it did not parse.
     pub collision: usize,
+    /// Cameras (section 2); `None` when the section is missing or in the
+    /// older layout.
+    pub cameras: Option<usize>,
 }
 
 impl RoomStats {
@@ -47,7 +50,7 @@ impl fmt::Display for RoomStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5}{}",
+            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5} cam={:>2}{}",
             self.objects,
             self.meshes,
             self.vertices,
@@ -57,6 +60,7 @@ impl fmt::Display for RoomStats {
             self.bounds_ok,
             self.objects,
             self.collision,
+            self.cameras.map_or("-".to_string(), |n| n.to_string()),
             if self.looks_valid() {
                 ""
             } else {
@@ -213,6 +217,13 @@ pub fn room_to_glb(data: &[u8], out: &Path) -> Result<RoomStats> {
     if let Ok(col) = room.collision(data) {
         stats.collision = col.polys.len();
         collision_to_glb(&col, &out.with_extension("collision.glb"))?;
+    }
+    if let Ok(cams) = room.cameras(data) {
+        stats.cameras = Some(cams.cameras.len());
+        fs::write(
+            out.with_extension("cameras.json"),
+            serde_json::to_vec_pretty(&cams)?,
+        )?;
     }
     Ok(stats)
 }

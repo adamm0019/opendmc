@@ -399,38 +399,52 @@ Flag bits, compared against the normal (floor `ny > 0.7`, ceiling
 Renders of `r100` (the castle hall) show the walls, pillars, stairs, the
 statue's plinth and the chandeliers' hulls in place over the room geometry.
 
-## 4e. Cameras (`.fsd` section 2): `speculative`, record walk `PC-verified`
+## 4e. Cameras (`.fsd` section 2): layout `PC-verified`, meaning partly inferred
 
-Present in 98 rooms (560–46,480 bytes). Header (16 bytes): `u32 count`, 4
-bytes of leftover memory, the tag `ver`, 4 more leftover bytes. Only
-`r503` lacks the tag (an older, smaller record layout, not handled yet).
+Present in 98 rooms (560–46,480 bytes); absent from the prologue rooms
+(`r002`, `r00d`, `r00e`) and from `r114`, `r318`, `r508`, `r50a`, `r50c`.
+Parsed by `dmc_formats::camera` (`Room::cameras`): 1,575 cameras in 97 rooms.
 
-Records follow the header back to back. Size = `0x220 + (flags & 0x10 ?
-16·n : 0)`, with `flags` at +0x158 and `n` at +0x15C. This walks every one
-of the 97 version-2 rooms exactly (1,576 records). Offsets are from the
-record start:
+Header (16 bytes): `u32 count`, 4 bytes of leftover memory, the tag
+`ver`, 4 more leftover bytes. Only `r503` lacks the tag: it uses an
+older, smaller record layout that is not handled yet.
+
+Records follow the header back to back. A record is 0x220 bytes, plus
+`16·n` rail bytes when `flags & 0x10`. This walks every version-2 room
+exactly. Offsets are from the record start:
 
 | Off | Field | Reading |
 |---|---|---|
-| 0x00 | f32×4 A (w = 1) | zone corner |
+| 0x00 | f32×4 A (w = 1) | activation-zone corner |
 | 0x10 | f32×4 B (w = 1) | opposite zone corner |
-| 0x20 | 6 × f32×4 (w = 0) | unit face normals: planes 0–2 through B, 3–5 through A. Together a convex hexahedron (checked on `r100` record 0): probably the **activation zone** |
+| 0x20 | 6 × f32×4 (w = 0) | outward unit normals of the zone's faces: faces 0–2 pass through B, faces 3–5 through A. The zone is the convex hexahedron they bound |
 | 0x80 | f32×4 | look-at offset, usually `(0, 900, 0)`: Dante's head height (Dante ≈ 900 units tall) |
-| 0x90 | f32×4 P1 | equals the last point of the look-at path |
-| 0xA0 | f32×4 P2 | equals the last point of the eye path |
-| 0xC0 | f32×4 P3 | unknown point |
-| 0xD0 | u8[128] | mostly `0x01`, some `0xFF`: per-object flags? (cut-away hiding is a guess) |
-| 0x150 | u8[8] | type bytes, e.g. `00 00 00 01 02 02 6e 00` |
-| 0x158 | u32 flags | `0x10` = has the path tail |
-| 0x15C | u32 n | tail point count |
-| 0x168 | f32, f32 | arc lengths of the two tail paths (match the points exactly) |
-| 0x180 | f32 | 55.0 in most records (also 54.6, 49.7, 42.6, 39.9, 25.1): the **FOV in degrees**, probably |
-| 0x190 | i32×4 | usually −1 (links?) |
-| 0x220 | n × f32×4 | two paths of n/2 points: look-at path (w small), then eye path (w = 1). Rail cameras, probably |
+| 0x90 | f32×4 | equals the last point of the look-at rail |
+| 0xA0 | f32×4 | equals the last point of the eye rail |
+| 0xC0 | f32×4 | unknown point |
+| 0xD0 | u8[128] | mostly `0x01`, some `0xFF`: per-object flags? (hiding objects that block the view is a guess) |
+| 0x150 | u8[8] | type bytes, e.g. `00 00 00 01 02 02 6e 00` (unknown) |
+| 0x158 | u32 flags | `0x10`: the record ends with rails |
+| 0x15C | u32 n | rail point count (both rails together) |
+| 0x168 | f32, f32 | arc lengths of the look-at and eye rails; they match the points exactly |
+| 0x180 | f32 | 55.0 in 44 of 53 `r100` records (also 54.6, 49.7, 42.6, 39.9, 25.1): the field of view in degrees, probably |
+| 0x190 | i32×4 | usually −1 (links to other cameras?) |
+| 0x220 | n × f32×4 | the look-at rail (n/2 points, small fourth component), then the eye rail (n/2 points, w = 1) |
 
-Still to confirm: how the player's position picks a point on the paths,
-the non-rail camera types, and whether FOV is vertical or horizontal.
-Renders of `r100` from P2 towards P1 are the next check.
+Evidence for the zone reading: in 1,574 of 1,575 records, A and B lie on
+the zone's boundary. Across the 97 rooms, 87% of floor collision polygons
+(§4d), sampled 100 units above their centres, fall inside at least one zone.
+Arbitrary boxes would not cover the walkable floor like that. The rest are
+probably floors the player can't reach (tops of props, ledges).
+
+Evidence for the rails: rendering `r100` record 1 from each eye-rail point
+towards the matching look-at point gives a coherent low tracking shot
+along the hall floor.
+
+Still to confirm against the running game: how the player's position picks
+a point on the rails, what the non-rail records do (fixed or tracking
+cameras), whether the FOV is vertical or horizontal, and what the type bytes
+and object flags mean.
 
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 
