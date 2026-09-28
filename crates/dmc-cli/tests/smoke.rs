@@ -229,3 +229,84 @@ fn full_pipeline_on_a_synthetic_install() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+/// A synthetic room: two placed objects, a quad strip each, and a PC texture
+/// container in section 34.
+fn pc_room() -> Vec<u8> {
+    use dmc_formats::dds;
+    use dmc_formats::room::{self, NewRoomMesh, NewRoomObject, flag};
+    let f = flag::ALWAYS;
+    let object = |x: f32| {
+        let mut transform = [[0.0; 4]; 4];
+        for (i, row) in transform.iter_mut().enumerate() {
+            row[i] = 1.0;
+        }
+        transform[0][3] = x;
+        NewRoomObject {
+            transform,
+            bounds: [x as i16 + 1, x as i16, 1, 0, 0, 0],
+            meshes: vec![NewRoomMesh {
+                tex_index: 0,
+                positions: vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.]],
+                normals: vec![[0., 0., 1.]; 4],
+                uvs: vec![[0., 0.]; 4],
+                flags: vec![f | flag::RESTART, f | flag::RESTART, f | flag::FRONT, f],
+                colours: vec![[128, 128, 128]; 4],
+            }],
+        }
+    };
+    let geometry = room::build_geometry(1, &[object(0.0), object(10.0)]);
+    let red = [0x00, 0xF8, 0, 0, 0, 0, 0, 0];
+    let textures = texture::build_pc(
+        texture::Kind::T32,
+        &[dds::build(4, 4, dds::Format::Dxt1, &[&red])],
+    );
+    room::build(&geometry, Some(&textures))
+}
+
+#[test]
+fn pc_room_pipeline() {
+    let root = std::env::temp_dir().join(format!("opendmc-smoke-room-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let install = root.join("install");
+    fs::create_dir_all(&install).unwrap();
+    let nbz = install.join("dmc1-0.nbz");
+    write_nbz(
+        &nbz,
+        &[("Fsd/r002.fsd", pc_room()), ("Pld/pl00.pld", pc_model())],
+    );
+
+    let reports = root.join("reports");
+    dmc(&["inventory", s(&install), "--out", s(&reports)]);
+    let md = fs::read_to_string(reports.join("inventory.md")).unwrap();
+    assert!(
+        md.contains("Files parsed as rooms: **1** (8 vertices)"),
+        "{md}"
+    );
+
+    let spec = format!("{}::Fsd/r002.fsd", nbz.display());
+    let info = dmc(&["info", &spec]);
+    assert!(
+        info.contains("Room { objects: 2, meshes: 2, vertices: 8, textures: 1 }"),
+        "{info}"
+    );
+
+    let one = root.join("one.glb");
+    let out = dmc(&["room", &spec, s(&one)]);
+    assert!(
+        out.contains("objects=  2") && out.contains("bounds=2/2"),
+        "{out}"
+    );
+
+    let all = dmc(&["room", s(&nbz), s(&root.join("rooms"))]);
+    assert!(
+        all.contains("1 rooms converted (0 flagged for review), 0 failed"),
+        "{all}"
+    );
+    let (doc, _, images) = gltf::import(root.join("rooms/Fsd/r002.glb")).expect("valid glTF");
+    assert_eq!(doc.nodes().count(), 2);
+    assert_eq!(images.len(), 1);
+    let (t, _, _) = doc.nodes().nth(1).unwrap().transform().decomposed();
+    assert_eq!(t, [10.0, 0.0, 0.0]);
+    let _ = fs::remove_dir_all(&root);
+}

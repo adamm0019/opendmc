@@ -105,6 +105,7 @@ fn kind_label(k: &Kind) -> String {
         Kind::PipeworksBundle { endian } => format!("bundle ({endian:?})"),
         Kind::TextureSet { endian, .. } => format!("texture set ({endian:?})"),
         Kind::Model { endian, layout, .. } => format!("model ({endian:?}, {layout})"),
+        Kind::Room { .. } => "room".into(),
         Kind::Known { name } => name.to_string(),
         Kind::Unknown => "unknown".into(),
     }
@@ -351,7 +352,20 @@ fn markdown(inv: &Inventory) -> String {
         archives.len(),
         archives.iter().map(|a| a.entries.len()).sum::<usize>()
     );
+    let rooms: Vec<usize> = inv
+        .kinds()
+        .filter_map(|k| match k {
+            Kind::Room { vertices, .. } => Some(*vertices),
+            _ => None,
+        })
+        .collect();
     let _ = writeln!(md, "- Files parsed as DMC1 models: **{models}**");
+    let _ = writeln!(
+        md,
+        "- Files parsed as rooms: **{}** ({} vertices)",
+        rooms.len(),
+        rooms.iter().sum::<usize>()
+    );
     let _ = writeln!(md, "- Files parsed as texture containers: **{textures}**\n");
 
     md.push_str("## Phase 1 gating questions\n\n");

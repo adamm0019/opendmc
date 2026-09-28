@@ -5,6 +5,7 @@ mod archive;
 mod export;
 mod gltf;
 mod inventory;
+mod room;
 mod wildcard;
 
 use anyhow::{Context, Result};
@@ -79,6 +80,15 @@ enum Cmd {
         #[arg(long)]
         anims: bool,
     },
+    /// Convert room files (`.fsd`) to glTF with every object placed: one
+    /// file (`archive.nbz::Fsd/r002.fsd`) to a `.glb`, or every room in a
+    /// directory or `.nbz` archive into a directory.
+    Room {
+        source: PathBuf,
+        out: PathBuf,
+        #[arg(long)]
+        pattern: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -112,6 +122,11 @@ fn main() -> Result<()> {
             pattern,
             anims,
         } => export::batch(&dir, &out, pattern.as_deref(), anims),
+        Cmd::Room {
+            source,
+            out,
+            pattern,
+        } => room::run(&source, &out, pattern.as_deref()),
     }
 }
 
