@@ -10,6 +10,9 @@ rust-version.workspace = true
 default = []
 # Controller support needs libudev headers on Linux.
 gamepad = ["bevy/bevy_gilrs"]
+# Trial: `--look rt`, real-time ray-traced lighting (Bevy Solari, needs
+# hardware ray tracing).
+rt = ["bevy/bevy_solari"]
 
 [dependencies]
 dmc-formats.workspace = true

@@ -8,7 +8,8 @@
 //! - `lightmap`: a baked lightmap for the node's meshes;
 //! - `reflection_probe`: a cubemap, filtered at runtime, over the node's box;
 //! - `irradiance_volume`: ambient cubes for actors over the node's box;
-//! - `fog_volume`, `density`, `colour`: volumetric fog over the node's box.
+//! - `fog_volume`, `density`, `colour`: volumetric fog over the node's box;
+//! - `shadows`, `volumetric` on a light: shadow casting, and shafts in fog.
 //!
 //! Boxes are the engine's unit cube scaled by the node, as the Blender kit
 //! draws them.
@@ -16,7 +17,9 @@
 use bevy::asset::io::AssetSourceBuilder;
 use bevy::gltf::{GltfAssetLabel, GltfExtras};
 use bevy::image::{ImageLoaderSettings, ImageSampler};
-use bevy::light::{FogVolume, GeneratedEnvironmentMapLight, IrradianceVolume, LightProbe};
+use bevy::light::{
+    FogVolume, GeneratedEnvironmentMapLight, IrradianceVolume, LightProbe, VolumetricLight,
+};
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
@@ -165,7 +168,7 @@ fn finish_scene(
             .clone()
     };
     let exposure = scene.lightmap_exposure;
-    let (mut lit, mut lights, mut probes, mut fog) = (0, 0, 0, 0);
+    let (mut lit, mut lights, mut probes, mut fog, mut shafts) = (0, 0, 0, 0, 0);
     for e in children.iter_descendants(ready.entity) {
         if let Ok(mut l) = points.get_mut(e) {
             linear_light_colour(&mut l.color);
@@ -208,7 +211,22 @@ fn finish_scene(
             ));
             probes += 1;
         }
-        if x.get("fog_volume").and_then(Value::as_bool) == Some(true) {
+        // A light node's flags: `shadows` for key lights, `volumetric` for
+        // those that draw shafts through the fog volumes.
+        let flag = |key: &str| x.get(key).and_then(Value::as_bool) == Some(true);
+        for light in children.get(e).into_iter().flatten() {
+            if let Ok(mut l) = points.get_mut(*light) {
+                l.shadows_enabled |= flag("shadows");
+            }
+            if let Ok(mut l) = spots.get_mut(*light) {
+                l.shadows_enabled |= flag("shadows");
+            }
+            if flag("volumetric") && (points.contains(*light) || spots.contains(*light)) {
+                commands.entity(*light).insert(VolumetricLight);
+                shafts += 1;
+            }
+        }
+        if flag("fog_volume") {
             let c = |i: usize| x["colour"][i].as_f64().unwrap_or(1.0) as f32;
             commands.entity(e).insert(FogVolume {
                 fog_color: Color::linear_rgb(c(0), c(1), c(2)),
@@ -237,7 +255,7 @@ fn finish_scene(
         }
     }
     info!(
-        "{}: {lit} lightmapped meshes, {lights} lights, {probes} light probes, {fog} fog volumes",
+        "{}: {lit} lightmapped meshes, {lights} lights ({shafts} volumetric), {probes} light probes, {fog} fog volumes",
         scene.dir
     );
 }

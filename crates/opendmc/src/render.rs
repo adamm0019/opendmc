@@ -37,6 +37,8 @@ pub enum Look {
     #[default]
     Reference,
     Modern,
+    /// Trial: real-time ray-traced lighting (feature `rt`, `crate::rt`).
+    Rt,
 }
 
 impl Look {
@@ -44,7 +46,63 @@ impl Look {
         match s {
             "reference" => Some(Look::Reference),
             "modern" => Some(Look::Modern),
+            "rt" => Some(Look::Rt),
             _ => None,
+        }
+    }
+
+    /// Lit by the modern stack (with a room look), rasterised or ray traced.
+    pub fn is_lit(self) -> bool {
+        self != Look::Reference
+    }
+}
+
+#[cfg_attr(not(feature = "rt"), allow(dead_code))]
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// A glowing panel the ray-traced look adds to a room (moonlight at a
+/// window, say).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Emitter {
+    /// Centre, in room units.
+    pub position: [f32; 3],
+    /// Width and height, metres.
+    pub size: [f32; 2],
+    /// Which way it shines.
+    pub facing: [f32; 3],
+    /// Linear RGB.
+    pub colour: [f32; 3],
+    /// Luminance, cd/m².
+    pub nits: f32,
+}
+
+/// The ray-traced look's lighting: the room's own lights as glowing spheres
+/// (scaled, desaturated, pulled from yellow toward amber), plus emitters.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct RtLook {
+    pub light_scale: f32,
+    /// Metres.
+    pub light_radius: f32,
+    pub desaturate: f32,
+    pub green: f32,
+    pub emitters: Vec<Emitter>,
+}
+
+impl Default for RtLook {
+    fn default() -> Self {
+        RtLook {
+            light_scale: 1.0,
+            light_radius: 0.12,
+            desaturate: 0.0,
+            green: 1.0,
+            emitters: Vec::new(),
         }
     }
 }
@@ -161,6 +219,11 @@ pub struct RoomLook {
     pub haze: Option<Haze>,
     #[serde(default)]
     pub volumetric: Volumetric,
+    #[serde(default)]
+    pub rt: RtLook,
+    /// Dust motes (`crate::dust`); none when absent.
+    #[serde(default)]
+    pub dust: Option<crate::dust::Dust>,
     pub grading: Grading,
 }
 
@@ -210,6 +273,8 @@ pub fn look_path(content: &Path, room: &Path) -> PathBuf {
 pub struct CurrentLook {
     pub look: RoomLook,
     pub bounds: Option<(Vec3, Vec3)>,
+    /// Where the room's own coordinates start, in the world.
+    pub origin: Vec3,
 }
 
 #[derive(Component)]
@@ -222,17 +287,32 @@ pub struct RenderPlugin {
     pub look: Look,
 }
 
+/// Which lit look is running.
+#[derive(Resource, Clone, Copy)]
+struct LookMode(Look);
+
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        if self.look != Look::Modern {
+        if !self.look.is_lit() {
             return;
         }
-        app.insert_resource(CurrentLook {
-            look: RoomLook::default_look(),
-            bounds: None,
-        })
-        .add_systems(PostStartup, modern_camera)
-        .add_systems(Update, apply_look.run_if(resource_changed::<CurrentLook>));
+        if self.look == Look::Rt {
+            // Solari reads a G-buffer, so opaque materials render deferred.
+            // (No irradiance volumes here, so Bevy 0.18.1's deferred bug is
+            // not in play.)
+            app.insert_resource(bevy::pbr::DefaultOpaqueRendererMethod::deferred());
+            #[cfg(feature = "rt")]
+            app.add_plugins(crate::rt::RtPlugin);
+        }
+        app.insert_resource(LookMode(self.look))
+            .insert_resource(CurrentLook {
+                look: RoomLook::default_look(),
+                bounds: None,
+                origin: Vec3::ZERO,
+            })
+            .add_systems(PostStartup, modern_camera)
+            .add_systems(Update, apply_look.run_if(resource_changed::<CurrentLook>))
+            .add_plugins(crate::dust::DustPlugin);
     }
 }
 
@@ -240,20 +320,37 @@ fn rgb(c: [f32; 3]) -> Color {
     Color::linear_rgb(c[0], c[1], c[2])
 }
 
-/// The conventional modern stack on the main camera. The per-room values
-/// come from [`apply_look`].
-fn modern_camera(mut commands: Commands, cams: Query<Entity, With<MainCamera>>) {
+/// The modern stack on the main camera: conventional, or Solari's ray-traced
+/// lighting. The per-room values come from [`apply_look`].
+fn modern_camera(
+    mode: Res<LookMode>,
+    mut commands: Commands,
+    cams: Query<Entity, With<MainCamera>>,
+) {
     for cam in &cams {
-        commands.entity(cam).insert((
-            Hdr,
-            Msaa::Off,
-            TemporalAntiAliasing::default(),
-            ScreenSpaceAmbientOcclusion::default(),
-        ));
+        let mut e = commands.entity(cam);
+        e.insert((Hdr, Msaa::Off));
+        if mode.0 == Look::Rt {
+            // No denoiser without DLSS (NVIDIA only); TAA's accumulation is
+            // the one that works everywhere.
+            e.insert(TemporalAntiAliasing::default());
+            #[cfg(feature = "rt")]
+            e.insert((
+                bevy::solari::prelude::SolariLighting::default(),
+                bevy::camera::CameraMainTextureUsages::default()
+                    .with(bevy::render::render_resource::TextureUsages::STORAGE_BINDING),
+            ));
+        } else {
+            e.insert((
+                TemporalAntiAliasing::default(),
+                ScreenSpaceAmbientOcclusion::default(),
+            ));
+        }
     }
 }
 
 fn apply_look(
+    mode: Res<LookMode>,
     current: Res<CurrentLook>,
     mut commands: Commands,
     cams: Query<Entity, With<MainCamera>>,
@@ -274,12 +371,6 @@ fn apply_look(
                 Tonemap::TonyMcMapface => Tonemapping::TonyMcMapface,
                 Tonemap::BlenderFilmic => Tonemapping::BlenderFilmic,
                 Tonemap::AcesFitted => Tonemapping::AcesFitted,
-            },
-            VolumetricFog {
-                ambient_color: rgb(look.volumetric.ambient_colour),
-                ambient_intensity: look.volumetric.ambient_intensity,
-                step_count: look.volumetric.step_count,
-                ..default()
             },
             AmbientLight {
                 color: rgb(look.ambient.colour),
@@ -304,6 +395,15 @@ fn apply_look(
                 highlights: g.highlights.into(),
             },
         ));
+        // Volumetric fog samples shadow maps, which ray tracing replaces.
+        if mode.0 != Look::Rt {
+            e.insert(VolumetricFog {
+                ambient_color: rgb(look.volumetric.ambient_colour),
+                ambient_intensity: look.volumetric.ambient_intensity,
+                step_count: look.volumetric.step_count,
+                ..default()
+            });
+        }
         if look.bloom > 0.0 {
             e.insert(Bloom {
                 intensity: look.bloom,
@@ -319,12 +419,17 @@ fn apply_look(
     }
     let m = &look.moon;
     let dir = Vec3::from_array(m.direction).normalize_or(Vec3::NEG_Y);
+    if m.illuminance <= 0.0 {
+        return;
+    }
+    let rt = mode.0 == Look::Rt;
     let mut moon = commands.spawn((
         MoonLight,
         DirectionalLight {
             color: rgb(m.colour),
             illuminance: m.illuminance,
-            shadows_enabled: true,
+            // Ray tracing replaces shadow maps.
+            shadows_enabled: !rt,
             ..default()
         },
         Transform::default().looking_to(dir, Vec3::Y),
@@ -336,7 +441,7 @@ fn apply_look(
         }
         .build(),
     ));
-    if m.shafts {
+    if m.shafts && !rt {
         moon.insert(VolumetricLight);
     }
 
@@ -365,12 +470,13 @@ pub fn set_room_look(
     room: &Path,
     bounds: (Vec3, Vec3),
 ) {
-    if options.look != Look::Modern {
+    if !options.look.is_lit() {
         return;
     }
     commands.insert_resource(CurrentLook {
         look: RoomLook::for_room(options.content.as_deref(), room),
         bounds: Some(bounds),
+        origin: crate::room_view::origin(options),
     });
 }
 

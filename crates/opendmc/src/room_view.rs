@@ -91,7 +91,7 @@ pub fn room_layer() -> RenderLayers {
 
 /// Where the room sits: apart from the arena when viewing, at the sim's
 /// origin when walking (room space is then sim space).
-fn origin(options: &Options) -> Vec3 {
+pub(crate) fn origin(options: &Options) -> Vec3 {
     if options.walk {
         Vec3::ZERO
     } else {
@@ -148,7 +148,7 @@ pub fn load_room(
             &data,
             origin(&options),
             options.walk,
-            options.look == Look::Modern,
+            options.look,
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -158,6 +158,16 @@ pub fn load_room(
     if points.is_empty() {
         return;
     }
+    spawn_rt_emitters(
+        &options,
+        path,
+        &room,
+        &data,
+        origin(&options),
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+    );
     set_room_look(
         &mut commands,
         &options,
@@ -229,6 +239,34 @@ pub fn load_room(
     ));
 }
 
+/// With `--look rt`: the room's own lights and the look's emitters as
+/// glowing meshes, under their own (metre-scaled) root.
+#[cfg_attr(not(feature = "rt"), allow(unused_variables))]
+#[allow(clippy::too_many_arguments)]
+fn spawn_rt_emitters(
+    options: &Options,
+    path: &Path,
+    room: &Room,
+    data: &[u8],
+    origin: Vec3,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    #[cfg(feature = "rt")]
+    if options.look == Look::Rt {
+        let root = commands
+            .spawn((
+                RoomRoot,
+                Transform::from_translation(origin),
+                Visibility::default(),
+            ))
+            .id();
+        let look = crate::render::RoomLook::for_room(options.content.as_deref(), path);
+        crate::rt::spawn_emitters(room, data, &look.rt, root, commands, meshes, materials);
+    }
+}
+
 /// The room's rebuilt visuals, when it has them: only when walking in the
 /// modern look with a content store holding the room's manifest.
 fn modern_manifest(options: &Options, room: &Path) -> Option<RoomManifest> {
@@ -277,17 +315,23 @@ fn spawn_visual(
     data: &[u8],
     origin: Vec3,
     walk: bool,
-    lit: bool,
+    look: Look,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
 ) -> Vec<Vec3> {
+    let lit = look.is_lit();
     let mut slots = Vec::new();
+    let mut cutouts = 0;
     if let Some((bytes, set)) = room.textures(data) {
         for img in &set.images {
             let material = match set.decode_rgba(bytes, img) {
                 Ok(Some(rgba)) => {
+                    // Only textures with holes need the alpha test; masked
+                    // materials also shade black under Solari (0.18.1).
+                    let cutout = rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 128);
+                    cutouts += cutout as usize;
                     let image = Image::new(
                         Extent3d {
                             width: img.width as u32,
@@ -301,7 +345,11 @@ fn spawn_visual(
                     );
                     StandardMaterial {
                         base_color_texture: Some(images.add(image)),
-                        alpha_mode: AlphaMode::Mask(0.5),
+                        alpha_mode: if cutout {
+                            AlphaMode::Mask(0.5)
+                        } else {
+                            AlphaMode::Opaque
+                        },
                         unlit: !lit,
                         perceptual_roughness: 0.8,
                         reflectance: 0.3,
@@ -385,6 +433,11 @@ fn spawn_visual(
             }
             triangles += tris.len();
             mesh.insert_indices(Indices::U32(tris.into_iter().flatten().collect()));
+            #[cfg(feature = "rt")]
+            if look == Look::Rt {
+                crate::rt::prepare_mesh(&mut mesh);
+            }
+            let handle = meshes.add(mesh);
             let material = slots
                 .get(m.tex_index as usize)
                 .cloned()
@@ -395,17 +448,25 @@ fn spawn_visual(
             } else {
                 room_layer()
             };
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(material),
-                ChildOf(node),
-                layer,
-            ));
+            let _drawn = commands
+                .spawn((
+                    Mesh3d(handle.clone()),
+                    MeshMaterial3d(material),
+                    ChildOf(node),
+                    layer,
+                ))
+                .id();
+            #[cfg(feature = "rt")]
+            if look == Look::Rt {
+                commands
+                    .entity(_drawn)
+                    .insert(crate::rt::raytraced(&handle));
+            }
         }
         objects += 1;
     }
     info!(
-        "{}: {objects} objects, {triangles} triangles, {} texture slots, bounds {lo} .. {hi}",
+        "{}: {objects} objects, {triangles} triangles, {} texture slots ({cutouts} cut-out), bounds {lo} .. {hi}",
         path.display(),
         slots.len()
     );
@@ -585,7 +646,7 @@ fn change_room(
             &data,
             Vec3::ZERO,
             true,
-            options.look == Look::Modern,
+            options.look,
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -593,6 +654,16 @@ fn change_room(
         ),
     };
     if !points.is_empty() {
+        spawn_rt_emitters(
+            &options,
+            &load.path,
+            &room,
+            &data,
+            Vec3::ZERO,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+        );
         set_room_look(
             &mut commands,
             &options,

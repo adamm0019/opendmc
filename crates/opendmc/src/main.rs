@@ -6,7 +6,7 @@
 //!         [--motion <section>:<index>] [--focus]] [--room <your .fsd>]
 //!         [--avatar <your pl00.pld>] [--walk [--start-camera N] [--through-door N]]
 //!         [--record <tape>]
-//!         [--demo] [--screenshot <png> [--at-tick N]]
+//!         [--demo] [--screenshot <png> [--at-tick N]] [--no-vsync] [--size WxH]
 //! ```
 //!
 //! Without game data it runs the graybox training room: an original capsule
@@ -23,11 +23,14 @@ mod avatar;
 mod cameras;
 mod capture;
 mod content;
+mod dust;
 mod play;
 mod render;
 mod room_cameras;
 mod room_doors;
 mod room_view;
+#[cfg(feature = "rt")]
+mod rt;
 
 use bevy::prelude::*;
 use dmc_sim::Rules;
@@ -64,6 +67,11 @@ pub struct Options {
     pub demo: bool,
     pub screenshot: Option<PathBuf>,
     pub at_tick: u64,
+    /// Present without waiting for vsync, so the logged frame times show the
+    /// real cost.
+    pub no_vsync: bool,
+    /// Window size in physical pixels.
+    pub size: Option<(u32, u32)>,
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -85,7 +93,10 @@ fn parse_args() -> Result<Options, String> {
                     .next()
                     .as_deref()
                     .and_then(Look::parse)
-                    .ok_or("--look needs modern or reference")?
+                    .ok_or("--look needs modern, rt or reference")?;
+                if o.look == Look::Rt && !cfg!(feature = "rt") {
+                    return Err("--look rt needs a build with `--features rt`".into());
+                }
             }
             "--content" => o.content = Some(args.next().ok_or("--content needs a path")?.into()),
             "--model" => o.model = Some(args.next().ok_or("--model needs a path")?.into()),
@@ -120,10 +131,21 @@ fn parse_args() -> Result<Options, String> {
                     .and_then(|n| n.parse().ok())
                     .ok_or("--at-tick needs a number")?
             }
+            "--no-vsync" => o.no_vsync = true,
+            "--size" => {
+                o.size = args
+                    .next()
+                    .and_then(|s| {
+                        let (w, h) = s.split_once('x')?;
+                        Some((w.parse().ok()?, h.parse().ok()?))
+                    })
+                    .map(Some)
+                    .ok_or("--size needs WxH, e.g. 2560x1440")?
+            }
             "-h" | "--help" => {
                 println!(
                     "opendmc [--profile original|enhanced] [--look modern|reference] [--content <dir>] [--model <file> [--motion <s>:<i>] [--focus]] [--room <file.fsd> [--walk [--start-camera N] [--through-door N]]] [--avatar <pl00.pld>] [--record <tape.odt>] \\
-                     [--demo] [--screenshot <png> [--at-tick N]]"
+                     [--demo] [--screenshot <png> [--at-tick N]] [--no-vsync] [--size WxH]"
                 );
                 std::process::exit(0);
             }
@@ -160,6 +182,17 @@ fn main() {
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: "OpenDMC".into(),
+            present_mode: if options.no_vsync {
+                bevy::window::PresentMode::AutoNoVsync
+            } else {
+                bevy::window::PresentMode::AutoVsync
+            },
+            resolution: match options.size {
+                Some((w, h)) => {
+                    bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0)
+                }
+                None => default(),
+            },
             ..default()
         }),
         ..default()
