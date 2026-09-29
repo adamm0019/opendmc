@@ -378,6 +378,9 @@ tools and scripts.
      `reflection_probes`, `gi_probes`, `fog_volumes`, `audio_zones`.
 
    Looking through an original camera shows the original composition.
+   `tools/blender/render_cameras.py` renders a layer through chosen original
+   cameras. The `reference` layer from `r100`'s cameras matches the engine's
+   own framing from the same cameras.
 3. **Authoring.** Modern geometry and materials go in the modern collections.
    Materials come from a shared library (`materials.blend`) of the families
    in §1, built on trim sheets and tileables. Custom properties carry
@@ -442,7 +445,8 @@ reference geometry. It must meet each of these:
 4. **Content store.** It holds a manifest loader and falls back to the
    reference look.
 5. **Blender kit.** `reference_room.py` builds `r100.blend` with the §1
-   collection tree, locked reference, cameras and triggers.
+   collection tree, locked reference, cameras and triggers. *Done
+   2026-09-29: 53 cameras, 19 triggers, 66 reference objects.*
 6. **Baked lighting.** A Cycles bake of the reference geometry (moonlight
    plus torches), with:
    - one reflection probe;
