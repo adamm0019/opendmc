@@ -3,14 +3,25 @@
 //! (`<content>/rooms/<room>/room.ron`) and the look is modern, its exported
 //! scene replaces the reference visuals. Gameplay never reads anything from
 //! here (ADR-011): collision, cameras and doors still come from the `.fsd`.
+//!
+//! What the exported nodes carry in their glTF extras:
+//! - `lightmap`: a baked lightmap for the node's meshes;
+//! - `reflection_probe`: a cubemap, filtered at runtime, over the node's box;
+//! - `irradiance_volume`: ambient cubes for actors over the node's box;
+//! - `fog_volume`, `density`, `colour`: volumetric fog over the node's box.
+//!
+//! Boxes are the engine's unit cube scaled by the node, as the Blender kit
+//! draws them.
 
 use bevy::asset::io::AssetSourceBuilder;
 use bevy::gltf::{GltfAssetLabel, GltfExtras};
 use bevy::image::{ImageLoaderSettings, ImageSampler};
+use bevy::light::{FogVolume, GeneratedEnvironmentMapLight, IrradianceVolume, LightProbe};
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -107,13 +118,9 @@ pub fn spawn_scene(
         .id()
 }
 
-/// The `lightmap` extra of a node, if it has one.
-fn lightmap_file(extras: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(extras)
-        .ok()?
-        .get("lightmap")?
-        .as_str()
-        .map(str::to_owned)
+/// A string extra of a node, e.g. its `lightmap` file.
+fn extra(extras: &Value, key: &str) -> Option<String> {
+    extras.get(key)?.as_str().map(str::to_owned)
 }
 
 /// Bevy reads a glTF light's colour as sRGB; glTF and Blender mean linear.
@@ -143,7 +150,22 @@ fn finish_scene(
         return;
     };
     let mut images: HashMap<String, Handle<Image>> = HashMap::new();
-    let (mut lit, mut lights) = (0, 0);
+    let mut load = |file: &str| {
+        images
+            .entry(file.to_owned())
+            .or_insert_with(|| {
+                assets.load_with_settings(
+                    format!("{}/{file}", scene.dir),
+                    |s: &mut ImageLoaderSettings| {
+                        s.is_srgb = false;
+                        s.sampler = ImageSampler::linear();
+                    },
+                )
+            })
+            .clone()
+    };
+    let exposure = scene.lightmap_exposure;
+    let (mut lit, mut lights, mut probes, mut fog) = (0, 0, 0, 0);
     for e in children.iter_descendants(ready.entity) {
         if let Ok(mut l) = points.get_mut(e) {
             linear_light_colour(&mut l.color);
@@ -155,21 +177,50 @@ fn finish_scene(
             l.affects_lightmapped_mesh_diffuse = false;
             lights += 1;
         }
-        let Some(file) = extras.get(e).ok().and_then(|x| lightmap_file(&x.value)) else {
+        let Some(x) = extras
+            .get(e)
+            .ok()
+            .and_then(|x| serde_json::from_str::<Value>(&x.value).ok())
+        else {
             continue;
         };
-        let image = images
-            .entry(file.clone())
-            .or_insert_with(|| {
-                assets.load_with_settings(
-                    format!("{}/{file}", scene.dir),
-                    |s: &mut ImageLoaderSettings| {
-                        s.is_srgb = false;
-                        s.sampler = ImageSampler::linear();
-                    },
-                )
-            })
-            .clone();
+        // Baked in the same units as the lightmaps, so the same exposure.
+        if let Some(file) = extra(&x, "reflection_probe") {
+            commands.entity(e).insert((
+                LightProbe,
+                GeneratedEnvironmentMapLight {
+                    environment_map: load(&file),
+                    intensity: exposure,
+                    rotation: Quat::IDENTITY,
+                    affects_lightmapped_mesh_diffuse: false,
+                },
+            ));
+            probes += 1;
+        }
+        if let Some(file) = extra(&x, "irradiance_volume") {
+            commands.entity(e).insert((
+                LightProbe,
+                IrradianceVolume {
+                    voxels: load(&file),
+                    intensity: exposure,
+                    affects_lightmapped_meshes: false,
+                },
+            ));
+            probes += 1;
+        }
+        if x.get("fog_volume").and_then(Value::as_bool) == Some(true) {
+            let c = |i: usize| x["colour"][i].as_f64().unwrap_or(1.0) as f32;
+            commands.entity(e).insert(FogVolume {
+                fog_color: Color::linear_rgb(c(0), c(1), c(2)),
+                density_factor: x["density"].as_f64().unwrap_or(0.02) as f32,
+                ..default()
+            });
+            fog += 1;
+        }
+        let Some(file) = extra(&x, "lightmap") else {
+            continue;
+        };
+        let image = load(&file);
         for mesh in children.get(e).into_iter().flatten() {
             let Ok(material) = mesh_materials.get(*mesh) else {
                 continue;
@@ -186,9 +237,8 @@ fn finish_scene(
         }
     }
     info!(
-        "{}: {lit} lightmapped meshes, {} lightmaps, {lights} lights",
-        scene.dir,
-        images.len()
+        "{}: {lit} lightmapped meshes, {lights} lights, {probes} light probes, {fog} fog volumes",
+        scene.dir
     );
 }
 
@@ -206,12 +256,14 @@ mod tests {
 
     #[test]
     fn lightmaps_come_from_node_extras() {
-        let extras = r#"{"standin": true, "lightmap": "lightmaps/lightmap0.ktx2"}"#;
+        let extras: Value =
+            serde_json::from_str(r#"{"standin": true, "lightmap": "lightmaps/lightmap0.ktx2"}"#)
+                .unwrap();
         assert_eq!(
-            lightmap_file(extras).as_deref(),
+            extra(&extras, "lightmap").as_deref(),
             Some("lightmaps/lightmap0.ktx2")
         );
-        assert_eq!(lightmap_file(r#"{"standin": true}"#), None);
+        assert_eq!(extra(&extras, "reflection_probe"), None);
         assert_eq!(room_stem(Path::new("x/R100.fsd")), "r100");
     }
 }

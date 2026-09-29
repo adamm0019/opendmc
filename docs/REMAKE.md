@@ -332,11 +332,11 @@ Everything below is built into Bevy 0.18 unless marked *custom*.
 
 | Stage | Choice |
 |---|---|
-| Frame | Linear HDR (`Hdr`, `Rgba16Float`); deferred opaque pass + forward transparents; depth, normal, motion-vector and deferred prepasses; MSAA off |
+| Frame | Linear HDR (`Hdr`, `Rgba16Float`); forward opaque and transparent passes with depth, normal and motion-vector prepasses; MSAA off. The plan was a deferred opaque pass, but Bevy 0.18.1's deferred lighting shader fails to compile once an irradiance volume exists (it sets `IRRADIANCE_VOLUME` without `IRRADIANCE_VOLUMES_ARE_USABLE`; fixed in 0.19.1). So the stack renders forward until the Bevy upgrade |
 | Direct light | Moonlight as a directional light with cascaded shadows (fixed cameras allow tight, per-camera cascade bounds); torches and candles as shadowed spot/point lights. PCSS soft shadows optional (`experimental_pbr_pcss`) |
 | Static indirect | Lightmaps baked with Blender Cycles into a second UV set; bicubic sampling. Stored as HDR KTX2 |
 | Dynamic indirect | One or more irradiance volumes per room (3D ambient-cube textures). Baked from the same Cycles scene (*custom bake script*) |
-| Specular | Reflection probes per room: cubemaps baked in Blender, prefiltered offline or at runtime (`GeneratedEnvironmentMapLight`). SSR on top for floors, puddles and polished stone |
+| Specular | Reflection probes per room: cubemaps baked in Blender, filtered at runtime (`GeneratedEnvironmentMapLight`). SSR on top for floors, puddles and polished stone once deferred returns with Bevy 0.19.1 |
 | AO | Static AO baked into lightmaps; SSAO for actors and contact detail |
 | Atmosphere | Exponential distance fog per room; `FogVolume` local volumes with `VolumetricLight` shafts from moonlit windows. Height fog uses fog volumes with a density texture; a small *custom* pass only if that falls short |
 | Decals | Clustered decals (`pbr_clustered_decals`) for grime, damp, blood and scorch marks; forward decals for small details |

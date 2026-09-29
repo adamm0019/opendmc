@@ -1,8 +1,11 @@
 //! How the game looks (`docs/REMAKE.md` §3, ADR-012).
 //!
-//! - `--look modern`, the product: linear HDR, deferred PBR, TAA, SSAO,
-//!   screen-space reflections, bloom, per-room exposure and grading, distance
-//!   fog, and moonlight with shadows and shafts through a room-sized haze.
+//! - `--look modern`, the product: linear HDR, forward PBR, TAA, SSAO,
+//!   bloom, per-room exposure and grading, distance fog, volumetric fog lit by
+//!   the room's volumetric lights, and moonlight with shadows and shafts.
+//!   Screen-space reflections wait for Bevy 0.19.1: in 0.18.1 the deferred
+//!   lighting pass fails to compile once an irradiance volume exists, so the
+//!   stack renders forward (docs/REMAKE.md §3).
 //! - `--look reference`: the original's own meshes with their baked vertex
 //!   lighting, unlit, for side-by-side checks.
 //!
@@ -17,10 +20,7 @@ use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{CascadeShadowConfigBuilder, FogVolume, VolumetricFog, VolumetricLight};
-use bevy::pbr::{
-    DefaultOpaqueRendererMethod, DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion,
-    ScreenSpaceReflections,
-};
+use bevy::pbr::{DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection, Hdr};
@@ -128,6 +128,25 @@ pub struct Grading {
     pub highlights: Section,
 }
 
+/// How much the fog volumes glow without a volumetric light (in-scattered
+/// ambient light), and how finely they are marched.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Volumetric {
+    pub ambient_colour: [f32; 3],
+    pub ambient_intensity: f32,
+    pub step_count: u32,
+}
+
+impl Default for Volumetric {
+    fn default() -> Self {
+        Volumetric {
+            ambient_colour: [1.0; 3],
+            ambient_intensity: 0.0,
+            step_count: 64,
+        }
+    }
+}
+
 /// One room's look (schema [`LOOK_SCHEMA`]).
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct RoomLook {
@@ -140,6 +159,8 @@ pub struct RoomLook {
     pub moon: Moon,
     pub fog: Fog,
     pub haze: Option<Haze>,
+    #[serde(default)]
+    pub volumetric: Volumetric,
     pub grading: Grading,
 }
 
@@ -206,13 +227,12 @@ impl Plugin for RenderPlugin {
         if self.look != Look::Modern {
             return;
         }
-        app.insert_resource(DefaultOpaqueRendererMethod::deferred())
-            .insert_resource(CurrentLook {
-                look: RoomLook::default_look(),
-                bounds: None,
-            })
-            .add_systems(PostStartup, modern_camera)
-            .add_systems(Update, apply_look.run_if(resource_changed::<CurrentLook>));
+        app.insert_resource(CurrentLook {
+            look: RoomLook::default_look(),
+            bounds: None,
+        })
+        .add_systems(PostStartup, modern_camera)
+        .add_systems(Update, apply_look.run_if(resource_changed::<CurrentLook>));
     }
 }
 
@@ -229,11 +249,6 @@ fn modern_camera(mut commands: Commands, cams: Query<Entity, With<MainCamera>>) 
             Msaa::Off,
             TemporalAntiAliasing::default(),
             ScreenSpaceAmbientOcclusion::default(),
-            ScreenSpaceReflections::default(),
-            VolumetricFog {
-                ambient_intensity: 0.0,
-                ..default()
-            },
         ));
     }
 }
@@ -259,6 +274,12 @@ fn apply_look(
                 Tonemap::TonyMcMapface => Tonemapping::TonyMcMapface,
                 Tonemap::BlenderFilmic => Tonemapping::BlenderFilmic,
                 Tonemap::AcesFitted => Tonemapping::AcesFitted,
+            },
+            VolumetricFog {
+                ambient_color: rgb(look.volumetric.ambient_colour),
+                ambient_intensity: look.volumetric.ambient_intensity,
+                step_count: look.volumetric.step_count,
+                ..default()
             },
             AmbientLight {
                 color: rgb(look.ambient.colour),

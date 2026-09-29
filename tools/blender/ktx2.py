@@ -1,5 +1,5 @@
 """A minimal KTX2 writer for baked lighting (ADR-013): one mip level, RGBA16F,
-zstd supercompression, a 2D image or a cubemap (six faces).
+zstd supercompression, as a 2D image, a cubemap (six faces) or a 3D texture.
 
 Block-compressed formats (BC6H/BC7) come later from our own encoder; this is
 enough for lightmaps and probes to load in the engine.
@@ -28,23 +28,16 @@ def _dfd_rgba16f():
     return struct.pack("<I", 4 + len(block)) + block
 
 
-def write(path, faces, level=10):
-    """Write `faces` (arrays of shape (h, w, 4), top row first): one face for
-    a 2D image, six (+X, -X, +Y, -Y, +Z, -Z) for a cubemap."""
+def _write(path, raw, width, height, depth, faces, level):
     import zstandard
 
-    assert len(faces) in (1, 6)
-    h, w = faces[0].shape[:2]
-    raw = b"".join(np.ascontiguousarray(f[:, :, :4], dtype=np.float16).tobytes() for f in faces)
     data = zstandard.ZstdCompressor(level=level).compress(raw)
     dfd = _dfd_rgba16f()
-
     header = 12 + 9 * 4 + 4 * 4 + 2 * 8
-    level_index = 3 * 8
-    dfd_offset = header + level_index
+    dfd_offset = header + 3 * 8
     data_offset = dfd_offset + len(dfd)
     out = bytearray(IDENTIFIER)
-    out += struct.pack("<9I", VK_FORMAT_R16G16B16A16_SFLOAT, 2, w, h, 0, 0, len(faces), 1, ZSTANDARD)
+    out += struct.pack("<9I", VK_FORMAT_R16G16B16A16_SFLOAT, 2, width, height, depth, 0, faces, 1, ZSTANDARD)
     out += struct.pack("<4I2Q", dfd_offset, len(dfd), 0, 0, 0, 0)
     out += struct.pack("<3Q", data_offset, len(data), len(raw))
     out += dfd
@@ -52,3 +45,27 @@ def write(path, faces, level=10):
     out += data
     with open(path, "wb") as f:
         f.write(out)
+
+
+# Half floats top out at 65504; anything above (a light seen directly) would
+# be stored as infinity, and filtering turns that into NaN.
+MAX_VALUE = 60000.0
+
+
+def _rgba16f(a):
+    a = np.nan_to_num(np.clip(a[..., :4], 0.0, MAX_VALUE), nan=0.0)
+    return np.ascontiguousarray(a, dtype=np.float16).tobytes()
+
+
+def write(path, faces, level=10):
+    """Write `faces` (arrays of shape (h, w, 4), top row first): one face for
+    a 2D image, six (+X, -X, +Y, -Y, +Z, -Z) for a cubemap."""
+    assert len(faces) in (1, 6)
+    h, w = faces[0].shape[:2]
+    _write(path, b"".join(_rgba16f(f) for f in faces), w, h, 0, len(faces), level)
+
+
+def write_3d(path, volume, level=10):
+    """Write a 3D texture from an array of shape (depth, height, width, 4)."""
+    d, h, w = volume.shape[:3]
+    _write(path, _rgba16f(volume), w, h, d, 1, level)
