@@ -308,30 +308,21 @@ disagree with the flat face.
 the PC character models (§4.2), which use V as stored. Evidence: the
 lettering on the rug in `r002` reads the right way round only with the flip.
 
-The three colour bytes are vertex lighting. About a third of meshes are
-grey; the rest are coloured, and the first byte runs lower than the other
-two, but the channel order and scale (values reach 255) are not confirmed.
-`dmc room` exports them as-is, divided by 255.
+The three colour bytes are vertex lighting in **B, G, R** order: the entry
+is a byte-reversed RGBA word, which is why the flag byte comes first. The
+PC files keep other words reversed too (the texture magics). About a third
+of meshes are grey. 0x80 is full brightness, and values reach 255
+(overbright). `dmc_formats::room` returns them as RGB, and `dmc room`
+exports them divided by 255.
 
-**Channel order, evidence so far.** Two readings are possible: R, G, B as
-stored, or B, G, R, if the entry is a byte-reversed RGBA word. That fits the
-flag byte coming first, and the PC files keep other words reversed (the
-texture magics).
-- **For B, G, R:** `r100`'s two chandeliers. Their vertices read
-  (0.6, 1.0, 1.0) as stored, and the room's own light records (§4h) put
-  lights of colour (255, 255, 130) exactly there. Read as B, G, R, the
-  fixture glows the colour of its light.
-- **Fog colour:** across 83 rooms it leans the B, G, R way, but only weakly
-  (correlation +0.29).
-- **Inconclusive:**
-  - across the archive, the fixtures of strongly tinted lights match the
-    B, G, R reading 101 times and the stored order 87 times;
-  - the vertex lighting around them matches 127 against 117;
-  - the ambient and key colours show no relation.
+**How the order was settled.** The files alone could not decide it.
+- `r100`'s chandeliers glow the colour of their light records (§4h) only
+  when read B, G, R.
+- Fog colour leans the same way, but weakly (+0.29 over 83 rooms).
+- Archive-wide fixture and neighbourhood checks were near chance.
 
-The order stays provisional until a capture of the original settles it.
-Colour identity is one of the things the remake must keep
-(`docs/REMAKE.md`).
+On 2026-09-29 the project owner compared renders of `r100`, `r406` and
+`r10c` in both orders with the original game and chose B, G, R.
 
 Normals are unit length except in `r40b`, where they are scaled by about
 1.8·10⁻⁵ (directions intact), and in `r305`, which has 4 NaN normals.

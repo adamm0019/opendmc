@@ -46,8 +46,9 @@ pub struct RoomMesh {
     pub uvs: Vec<[f32; 2]>,
     /// Strip flags, see [`flag`].
     pub flags: Vec<u8>,
-    /// The three colour bytes after the flag byte, in file order. The channel
-    /// order is not confirmed yet (docs/formats/README.md §4b).
+    /// Vertex lighting as RGB. The file stores the flag byte, then blue,
+    /// green and red (a byte-reversed RGBA word); 0x80 is full brightness
+    /// (docs/formats/README.md §4b).
     pub colours: Vec<[u8; 3]>,
 }
 
@@ -229,7 +230,7 @@ fn parse_mesh(r: &Reader, d: usize) -> Result<(RoomMesh, usize)> {
         m.uvs.push([u, 1.0 - v]);
         let c = &colour_bytes[4 * k..4 * k + 4];
         m.flags.push(c[0]);
-        m.colours.push([c[1], c[2], c[3]]);
+        m.colours.push([c[3], c[2], c[1]]);
     }
     Ok((m, next))
 }
@@ -314,7 +315,7 @@ impl Room {
 
 // ---------------------------------------------------------------- writer
 
-/// A mesh for [`build`]; `flags` and `colours` are written as stored.
+/// A mesh for [`build`]; `flags` as stored, `colours` as RGB.
 pub struct NewRoomMesh {
     pub tex_index: u16,
     pub positions: Vec<[f32; 3]>,
@@ -368,7 +369,7 @@ pub fn build_geometry(tex_count: u8, objects: &[NewRoomObject]) -> Vec<u8> {
             }
             w.pad_to(UNIT, FILL);
             for (f, c) in m.flags.iter().zip(&m.colours) {
-                w.u8(*f).bytes(c);
+                w.u8(*f).bytes(&[c[2], c[1], c[0]]);
             }
             w.pad_to(UNIT, FILL);
             debug_assert_eq!(w.pos(), d + next * UNIT);
