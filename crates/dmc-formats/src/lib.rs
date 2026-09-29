@@ -20,6 +20,7 @@ pub mod dxt;
 pub mod error;
 pub mod geometry;
 pub mod ik;
+pub mod lights;
 pub mod model;
 pub mod motion;
 pub mod props;

@@ -96,6 +96,49 @@ fn every_room_parses() {
     assert_eq!(unit_normals, 1_184);
 }
 
+/// Sections 4 and 5 are whole light sets, and every light slot stores its
+/// colour twice (0–255, then divided by 255).
+#[test]
+fn light_sets_parse_in_every_room() {
+    let Some(rooms) = rooms() else {
+        eprintln!("OPENDMC_GAME_DIR not set; skipped");
+        return;
+    };
+    let (mut sets, mut missing, mut lights, mut consistent) = ([0; 2], [0; 2], 0, 0);
+    let mut kinds = std::collections::BTreeMap::new();
+    for (name, data) in &rooms {
+        let room = Room::parse(data).unwrap();
+        for (i, &section) in dmc_formats::lights::SECTIONS.iter().enumerate() {
+            let Some(raw) = room.section(data, section) else {
+                missing[i] += 1;
+                continue;
+            };
+            let all = room
+                .light_sets(data, section)
+                .unwrap_or_else(|e| panic!("{name} section {section}: {e}"));
+            sets[i] += all.len();
+            // Each slot also stores its colour divided by 255.
+            for (s, set) in all.iter().enumerate() {
+                for l in &set.lights {
+                    lights += 1;
+                    *kinds.entry(l.kind).or_insert(0) += 1;
+                    let o = s * 0xC60 + 0x60 + l.index * 0x30 + 0x20;
+                    let f = |k: usize| {
+                        f32::from_le_bytes(raw[o + 4 * k..o + 4 * k + 4].try_into().unwrap())
+                    };
+                    consistent +=
+                        (0..3).all(|k| (f(k) - l.colour[k] / 255.0).abs() < 0.01) as usize;
+                }
+            }
+        }
+    }
+    // Six rooms have no section 5.
+    assert_eq!((sets, missing), ([216, 241], [0, 6]));
+    assert_eq!((lights, consistent), (20_800, 20_800));
+    // Kinds 3 and 4 are most placed lights; kind 0 slots sit on the Y axis.
+    assert_eq!((kinds[&0], kinds[&3], kinds[&4]), (10_196, 5_131, 3_388));
+}
+
 /// Records with sub-kind 0 and a room id, over kinds 1, 2, 3 and 7.
 const DOORS: usize = 249;
 

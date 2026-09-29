@@ -6,6 +6,7 @@ use crate::export::encode_png;
 use crate::gltf::Glb;
 use anyhow::{Context, Result, bail};
 use dmc_formats::collision::{Collision, surface};
+use dmc_formats::lights;
 use dmc_formats::props::{self, TextureRef};
 use dmc_formats::room::{Room, RoomObject};
 use dmc_formats::texture::TextureSet;
@@ -42,6 +43,8 @@ pub struct RoomStats {
     pub props: usize,
     /// Doors among the triggers (section 3).
     pub doors: usize,
+    /// Lights in the first light set of section 4.
+    pub lights: usize,
 }
 
 impl RoomStats {
@@ -57,7 +60,7 @@ impl fmt::Display for RoomStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5} cam={:>2} props={:2} doors={:2}{}",
+            "objects={:3} meshes={:4} verts={:6} tris={:6} tex={:2} nrmlen={:.4} bounds={}/{} col={:5} cam={:>2} props={:2} doors={:2} lights={:2}{}",
             self.objects,
             self.meshes,
             self.vertices,
@@ -70,6 +73,7 @@ impl fmt::Display for RoomStats {
             self.cameras.map_or("-".to_string(), |n| n.to_string()),
             self.props,
             self.doors,
+            self.lights,
             if self.looks_valid() {
                 ""
             } else {
@@ -239,6 +243,22 @@ pub fn room_to_glb(data: &[u8], out: &Path) -> Result<RoomStats> {
         fs::write(
             out.with_extension("triggers.json"),
             serde_json::to_vec_pretty(&triggers)?,
+        )?;
+    }
+    // Every light set of sections 4 and 5, keyed by section.
+    let mut light_sets = serde_json::Map::new();
+    for section in lights::SECTIONS {
+        if let Ok(sets) = room.light_sets(data, section) {
+            if section == lights::SECTIONS[0] {
+                stats.lights = sets.first().map_or(0, |s| s.lights.len());
+            }
+            light_sets.insert(section.to_string(), serde_json::to_value(&sets)?);
+        }
+    }
+    if !light_sets.is_empty() {
+        fs::write(
+            out.with_extension("lights.json"),
+            serde_json::to_vec_pretty(&light_sets)?,
         )?;
     }
     if room.section(data, props::SECTION).is_some() {
