@@ -7,6 +7,7 @@ use crate::camera::{self, Cameras};
 use crate::collision::{self, Collision};
 use crate::error::{FormatError, Result};
 use crate::geometry::PC_PAD;
+use crate::lights::LightSet;
 use crate::model::{Layout, ModelFile};
 use crate::props::{self, Props};
 use crate::texture::TextureSet;
@@ -46,7 +47,7 @@ pub struct RoomMesh {
     /// Strip flags, see [`flag`].
     pub flags: Vec<u8>,
     /// The three colour bytes after the flag byte, in file order. The channel
-    /// order is not confirmed yet.
+    /// order is not confirmed yet (docs/formats/README.md §4b).
     pub colours: Vec<[u8; 3]>,
 }
 
@@ -271,7 +272,6 @@ impl Room {
         Cameras::parse(section)
     }
 
-    /// The collision tree and polygons of section 9.
     /// The triggers of section 3 (doors among them).
     pub fn triggers(&self, data: &[u8]) -> Result<Triggers> {
         let section = self
@@ -288,6 +288,15 @@ impl Room {
         Props::parse(section)
     }
 
+    /// The light sets of lighting section 4 or 5 ([`crate::lights::SECTIONS`]).
+    pub fn light_sets(&self, data: &[u8], section: usize) -> Result<Vec<LightSet>> {
+        let bytes = self
+            .section(data, section)
+            .ok_or_else(|| FormatError::invalid("room", "light section is empty"))?;
+        LightSet::parse_all(bytes)
+    }
+
+    /// The collision tree and polygons of section 9.
     pub fn collision(&self, data: &[u8]) -> Result<Collision> {
         let section = self
             .section(data, collision::SECTION)

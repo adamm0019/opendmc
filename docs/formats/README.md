@@ -313,6 +313,26 @@ grey; the rest are coloured, and the first byte runs lower than the other
 two, but the channel order and scale (values reach 255) are not confirmed.
 `dmc room` exports them as-is, divided by 255.
 
+**Channel order, evidence so far.** Two readings are possible: R, G, B as
+stored, or B, G, R, if the entry is a byte-reversed RGBA word. That fits the
+flag byte coming first, and the PC files keep other words reversed (the
+texture magics).
+- **For B, G, R:** `r100`'s two chandeliers. Their vertices read
+  (0.6, 1.0, 1.0) as stored, and the room's own light records (§4h) put
+  lights of colour (255, 255, 130) exactly there. Read as B, G, R, the
+  fixture glows the colour of its light.
+- **Fog colour:** across 83 rooms it leans the B, G, R way, but only weakly
+  (correlation +0.29).
+- **Inconclusive:**
+  - across the archive, the fixtures of strongly tinted lights match the
+    B, G, R reading 101 times and the stored order 87 times;
+  - the vertex lighting around them matches 127 against 117;
+  - the ambient and key colours show no relation.
+
+The order stays provisional until a capture of the original settles it.
+Colour identity is one of the things the remake must keep
+(`docs/REMAKE.md`).
+
 Normals are unit length except in `r40b`, where they are scaled by about
 1.8·10⁻⁵ (directions intact), and in `r305`, which has 4 NaN normals.
 
@@ -326,7 +346,7 @@ rooms (62 distinct sets of non-empty sections):
 | 0 | 0x80 | small parameter block (floats, `0xFF` runs); always 0x80 |
 | 1 | 0x90 | floats (e.g. 32.0, 48.0, 96.0); always 0x90 |
 | 3 | 0x2C00 | fixed 11,264 bytes (105 rooms): **triggers**, doors among them (§4g) |
-| 4, 5 | 0x6300 each | multiples of 3,168 bytes; float colours (e.g. 163, 157, 144) and positions. **Lighting candidate** (two sets) |
+| 4, 5 | 0x6300 each | **light sets** (§4h): whole 3,168-byte sets, 1–8 per section; section 5 is missing in 6 rooms |
 | 9 | 0x32C0 | **collision** (§4d, `PC-verified`), then an object culling tree and a table not parsed yet |
 | 14 | — | room geometry (§4b, `PC-verified`) |
 | 15 | 0x30 | a permutation of 0..0x20 (draw or object order?); always 0x30 |
@@ -589,6 +609,53 @@ their heads carry small integers or points instead. Whether the original
 opens a door on contact or on a button press, and which way the player faces
 on arrival (perhaps the `extra` byte), is still to be checked against
 captures.
+
+## 4h. Light sets (`.fsd` sections 4 and 5): layout `PC-verified`, meaning partly understood
+
+Parsed by `dmc_formats::lights` (`Room::light_sets`). Both sections are
+whole sets of 0xC60 bytes: 216 sets in section 4 over 106 rooms, and 241 in
+section 5 over 100. Rooms carry one to eight sets per section, and the two
+sections are identical in only five rooms. Which set applies when (mission
+state, geometry or characters) is not known yet.
+
+```
+set (0xC60):
+  header (0x60):
+    u32×8          not understood (zero in some rooms)
+    f32×3, pad     ambient colour, 0–255             r100: 25.5 grey
+    f32×3, pad     a key colour, 0–255 (role unconfirmed)
+    f32×4          fog: amount at near, amount at far (0–255), near, far
+                   (room units)                      r100: 0, 220, 7,700, 114,900
+    u32×3, pad     fog colour, 0–255                 r100: 40, 38, 33
+  64 light slots (0x30 each; empty slots are all zero):
+    f32×3          position (room units)
+    f32            1 / near²
+    f32×3          colour, 0–255
+    u32            type: low byte = kind, top byte = flags (0x80 on some)
+    f32×3          colour / 255
+    f32            1 / far²
+```
+
+Each of the 20,800 lights stores its colour twice, and the second copy
+always equals the first divided by 255, which pins the record layout.
+
+**Kinds:**
+- 3 (5,131 lights) and 4 (3,388) are most placed lights.
+- 0 (10,196) marks slots whose position lies on the Y axis, (0, y, 0),
+  with white colour; their meaning is unknown.
+- The others are 1, 2, 5, 6, 7 and 15.
+
+**Falloff.** The two falloff terms read as distances with near < far for
+point lights: `r100`'s chandelier lights are 2,500 and 3,260 units, its
+torches 1,900 and 2,800.
+
+**In `r100`:** the float colours are warm for torches (255, 122, 57) and
+chandeliers (255, 255, 130), and cool for a few high lights by the windows
+(60, 100, 150). Floats have no byte-order doubt, so these lights are the
+most direct record of the original's lighting design. The remake's lighting
+starts from them (`docs/REMAKE.md` §5).
+
+`dmc room` writes every set as `<room>.lights.json`.
 
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 
