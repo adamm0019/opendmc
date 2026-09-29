@@ -28,6 +28,7 @@ def args():
     p.add_argument("--layer", default="reference", choices=["reference", "modern"])
     p.add_argument("--engine", default="workbench", choices=["workbench", "eevee", "cycles"])
     p.add_argument("--samples", type=int, default=64)
+    p.add_argument("--view", default="Filmic", help="view transform (Filmic matches the engine)")
     return p.parse_args(argv)
 
 
@@ -57,6 +58,7 @@ def main():
         scene.cycles.samples = a.samples
         scene.cycles.use_denoising = True
 
+    scene.view_settings.view_transform = a.view
     wanted = {int(x) for x in a.cameras.split(",") if x}
     cams = sorted((o for o in cols["cameras"].objects if o.type == "CAMERA"),
                   key=lambda o: o["index"])
@@ -65,7 +67,7 @@ def main():
         if wanted and cam["index"] not in wanted:
             continue
         scene.camera = cam
-        scene.render.filepath = os.path.join(os.path.abspath(a.out), f"{a.layer}_cam{cam['index']:02}.png")
+        scene.render.filepath = os.path.join(os.path.abspath(a.out), f"{a.layer}_{a.view.lower()}_cam{cam['index']:02}.png")
         bpy.ops.render.render(write_still=True)
         print("render_cameras:", scene.render.filepath)
 

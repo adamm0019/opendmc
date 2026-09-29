@@ -342,7 +342,7 @@ Everything below is built into Bevy 0.18 unless marked *custom*.
 | Decals | Clustered decals (`pbr_clustered_decals`) for grime, damp, blood and scorch marks; forward decals for small details |
 | Wet surfaces | Material-level wetness mask (vertex-colour or texture channel) darkening albedo and lowering roughness, plus SSR. *Custom* extended material |
 | Particles | GPU particles for combat and ambience; the library is chosen at B3, and `bevy_hanabi` is a candidate if it tracks Bevy 0.18 |
-| Post | Bloom with conservative thresholds; auto-exposure clamped by the room's EV range, plus per-camera bias; tonemapping (AgX or TonyMcMapface, chosen on the benchmark for how they hold saturated colour); per-room `ColorGrading`, with LUTs later |
+| Post | Bloom with conservative thresholds; fixed per-room exposure (auto-exposure clamped by the room's EV range later), plus per-camera bias; tone mapping `BlenderFilmic` by default (see *Authoring parity* below); per-room `ColorGrading`, with LUTs later |
 | AA / resolution | TAA at native resolution first. Dynamic resolution later. DLSS as an optional feature (NVIDIA only). FSR is not in Bevy, so it is deferred |
 | Culling / LOD | Frustum culling, plus **precomputed visible sets per fixed camera** (each camera sees a known part of the room, so this is cheap and exact), plus `VisibilityRange` LOD crossfades. GPU occlusion culling optional |
 | HDR display output | Not exposed by Bevy 0.18. The frame is HDR internally, so it can be added when the engine supports it. Deferred |
@@ -350,6 +350,25 @@ Everything below is built into Bevy 0.18 unless marked *custom*.
 
 The reference look stays available through `--look reference` for
 side-by-side checks.
+
+**Authoring parity** (measured on `r100`, 2026-09-29). What is lit in
+Blender must read the same in the engine, or art review in Blender means
+nothing. The rules:
+- Author in Blender's **Filmic** view at exposure 0.
+- The engine uses `BlenderFilmic` tone mapping at **EV100 9.15**. Blender's
+  glTF exporter turns a watt into 683 lm, and Bevy scales luminance by
+  1/(1.2·2^EV), so EV100 9.15 is the exposure at which one watt reads as one
+  Blender unit.
+- Bake lightmaps with `lightmap_exposure` 683 in the manifest.
+
+Measured on six surfaces through two original cameras, the engine lands at
+0.80–0.95 of Cycles' brightness. The channels agree within ±0.06, except
+one patch where blue sits 0.2 higher, so the hue matches. The small
+remaining gap is plausibly the glossy light Cycles renders and a diffuse
+bake leaves out.
+
+Bevy's AgX does not match Blender 4.4's AgX: it shifted saturated yellows
+green by 10–20%, so AgX is not used for authoring.
 
 ---
 
@@ -448,7 +467,10 @@ reference geometry. It must meet each of these:
    collection tree, locked reference, cameras and triggers. *Done
    2026-09-29: 53 cameras, 19 triggers, 66 reference objects.*
 6. **Baked lighting.** A Cycles bake of the reference geometry (moonlight
-   plus torches), with:
+   plus torches), with *(lightmaps done 2026-09-29: `bake_room.py`,
+   `export_room.py`, `opendmc::content`; 2048² at 256 samples in 147 s on an
+   RX 7800 XT; the rig starts from the original's own lights, §4h of the
+   format notes)*:
    - one reflection probe;
    - one irradiance volume;
    - one fog volume with light shafts.

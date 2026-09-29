@@ -49,8 +49,14 @@ impl Look {
     }
 }
 
+/// Tone mapping. `BlenderFilmic` is the authoring default: it matches
+/// Blender's Filmic view, so a room lit in Blender reads the same here
+/// (docs/REMAKE.md §3).
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 pub enum Tonemap {
+    /// No tone mapping (clipped), for calibrating against Blender's
+    /// "Standard" view.
+    None,
     AgX,
     TonyMcMapface,
     BlenderFilmic,
@@ -248,6 +254,7 @@ fn apply_look(
                 ev100: look.exposure_ev100,
             },
             match look.tonemapping {
+                Tonemap::None => Tonemapping::None,
                 Tonemap::AgX => Tonemapping::AgX,
                 Tonemap::TonyMcMapface => Tonemapping::TonyMcMapface,
                 Tonemap::BlenderFilmic => Tonemapping::BlenderFilmic,

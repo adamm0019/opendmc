@@ -1,13 +1,14 @@
 // The look of a room without its own `look.ron` (docs/REMAKE.md §3).
 // Our own neutral placeholder, not measured from the original: cool
 // moonlight and a soft ambient term until a room has its own look and baked
-// lighting. Units: exposure in EV100 (9.7 matches Blender's default, so
-// scenes lit in Blender read the same here), moonlight in lux, ambient in
-// cd/m², fog visibility in metres.
+// lighting. Units: exposure in EV100 (9.15 with BlenderFilmic matches
+// Blender's Filmic view at exposure 0, given its exporter's 683 lm/W; see
+// docs/REMAKE.md §3), moonlight in lux, ambient in cd/m², fog visibility in
+// metres.
 (
     schema: 1,
-    exposure_ev100: 9.7,
-    tonemapping: TonyMcMapface,
+    exposure_ev100: 9.15,
+    tonemapping: BlenderFilmic,
     bloom: 0.08,
     ambient: (colour: (0.72, 0.76, 0.92), brightness: 450.0),
     moon: (

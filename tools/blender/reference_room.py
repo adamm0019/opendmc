@@ -289,6 +289,9 @@ def main():
     scene.unit_settings.scale_length = 1.0
     scene.render.engine = "CYCLES"
     scene.render.resolution_x, scene.render.resolution_y = 1280, 720
+    # The engine's tone mapping matches this view (docs/REMAKE.md §3).
+    scene.view_settings.view_transform = "Filmic"
+    scene.view_settings.exposure = 0.0
 
     cols = {name: collection(name) for name in LOCKED + MODERN}
     import_glb(os.path.join(ref, f"{room}.glb"), cols["reference"])
