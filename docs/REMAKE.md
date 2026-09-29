@@ -430,7 +430,7 @@ Before any new art is made, run the whole modern pipeline on `r100`'s
 reference geometry. It must meet each of these:
 
 1. **Doors.** `--walk` crosses between `r100` and its neighbours through
-   runtime room loading (the lifecycle in §2.3).
+   runtime room loading (the lifecycle in §2.3). *Done 2026-09-29.*
 2. **Units.** One shared metre constant; the sim, renderer and exports agree.
 3. **Modern look.** `--look modern` uses the HDR deferred stack from §3:
    shadows, SSAO, SSR, TAA, bloom, clamped exposure and grading. It is driven

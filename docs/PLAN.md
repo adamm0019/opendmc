@@ -99,10 +99,9 @@ Design rules:
 Time estimates assume one developer working part-time with heavy LLM help.
 Treat them as rough.
 
-**Current priority (2026-09-29).**
-1. Finish door transitions (Phase 3).
-2. Milestone B0 of the benchmark track: the modern pipeline proven on `r100`'s
-   original geometry ([`REMAKE.md`](REMAKE.md) §5).
+**Current priority (2026-09-29).** Door transitions (Phase 3) are done. Next
+is Milestone B0 of the benchmark track: the modern pipeline proven on `r100`'s
+original geometry ([`REMAKE.md`](REMAKE.md) §5).
 
 After that, Phases 4–8 are pulled forward only as far as the benchmark room
 needs them. Nothing beyond `r100` is rebuilt until the benchmark is signed
@@ -208,6 +207,16 @@ to authored cameras matches screenshots within ~1° and ~5% FOV.
   aim at the player's head.
 - `--start-camera N` starts in camera N's zone, for comparing one camera at a
   time with the original.
+- Doors (§4g) work in `--walk`:
+  - stepping into a door's volume loads the room it names from the same
+    folder;
+  - the player arrives at the door's stored point, and the new room's
+    cameras take over;
+  - `--through-door N` takes door N straight away.
+
+  A room loads in two halves (ADR-011): the reference visuals, and the
+  gameplay data (collision, cameras, doors). A rebuilt visual layer can
+  therefore replace the reference one.
 - Props (section 19) parse (§4f), but where they stand is not in that
   section.
 - To do:
@@ -215,6 +224,8 @@ to authored cameras matches screenshots within ~1° and ~5% FOV.
   - what hides the geometry between some eyes and the player (the camera's
     +0xD0 bytes are not per-object occluder flags);
   - cut rules and blending, checked against captures of the original;
+  - whether doors open on contact or on a button press, and which way the
+    player faces on arrival;
   - `r503`'s older camera layout.
 
 ### Phase 4: Dante on screen *(2–3 weeks)*

@@ -71,6 +71,14 @@ pub struct SimState {
     last_events: Vec<Event>,
 }
 
+impl SimState {
+    /// After actors are moved somewhere new (a door), so they don't slide
+    /// there from where they were.
+    pub fn reset_interpolation(&mut self) {
+        self.prev = positions(&self.sim);
+    }
+}
+
 /// Input gathered per rendered frame, consumed by the next fixed tick.
 /// Presses are latched so a tap shorter than a tick is never lost.
 #[derive(Resource, Default)]

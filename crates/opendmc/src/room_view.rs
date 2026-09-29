@@ -3,27 +3,64 @@
 //! (the original's baked lighting, so materials are unlit). A fly camera
 //! starts inside at eye height: arrow keys move, PageUp/PageDown rise and
 //! sink, `,`/`.` turn. With `--walk` the room is the play space instead: the
-//! sim runs on its collision and the room's own cameras follow the player.
-//! Nothing is cached or written.
+//! sim runs on its collision, the room's own cameras follow the player, and
+//! its doors lead on to the rooms beside it. Nothing is cached or written.
+//!
+//! A room is loaded in two halves (ADR-011): its visuals, which can be
+//! replaced, and its gameplay (collision, cameras, doors), which only ever
+//! comes from the room's own data.
 
 use crate::Options;
 use crate::play::{RoomCams, SimState};
 use crate::room_cameras::{RoomCamera, RoomDirector};
+use crate::room_doors::{RoomDoors, room_path};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use dmc_formats::room::Room;
+use dmc_formats::triggers::room_name;
+use dmc_sim::V3;
 use dmc_sim::world::World;
-use dmc_sim::{Sim, V3};
+use std::path::{Path, PathBuf};
 
 pub struct RoomViewPlugin;
 
 impl Plugin for RoomViewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_room).add_systems(Update, fly);
+        app.add_message::<LoadRoom>()
+            .add_systems(Startup, load_room)
+            .add_systems(Update, (fly, use_doors, change_room).chain());
     }
+}
+
+/// Replace the walked room with another, the player arriving at `arrival`
+/// (in the new room's units).
+#[derive(Message, Clone, Debug)]
+pub struct LoadRoom {
+    pub path: PathBuf,
+    pub arrival: [f32; 3],
+}
+
+/// The room being walked: where it came from and its doors.
+#[derive(Resource)]
+pub struct ActiveRoom {
+    pub path: PathBuf,
+    pub doors: RoomDoors,
+}
+
+/// The root of the loaded room's visuals, despawned when a door replaces it.
+#[derive(Component)]
+struct RoomRoot;
+
+/// Where the player starts in a room.
+#[derive(Clone, Copy, Debug)]
+enum Start {
+    /// In this camera's zone, or else in the first zone with a floor.
+    Camera(Option<usize>),
+    /// At a door's arrival point, in room units.
+    Arrival([f32; 3]),
 }
 
 /// Room units per metre-ish sim unit: Dante is ~900 units tall and the sim's
@@ -66,6 +103,24 @@ struct FlyCamera {
     yaw: f32,
 }
 
+fn read_room(path: &Path) -> Option<(Room, Vec<u8>)> {
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(e) => {
+            error!("{}: {e}", path.display());
+            return None;
+        }
+    };
+    match Room::parse(&data) {
+        Ok(room) => Some((room, data)),
+        Err(e) => {
+            error!("{}: not a room ({e})", path.display());
+            None
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn load_room(
     options: Res<Options>,
     mut state: ResMut<SimState>,
@@ -73,19 +128,108 @@ pub fn load_room(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut loads: MessageWriter<LoadRoom>,
 ) {
     let Some(path) = &options.room else { return };
-    let data = match std::fs::read(path) {
-        Ok(d) => d,
-        Err(e) => return error!("{}: {e}", path.display()),
+    let Some((room, data)) = read_room(path) else {
+        return;
     };
-    let room = match Room::parse(&data) {
-        Ok(r) => r,
-        Err(e) => return error!("{}: not a room ({e})", path.display()),
-    };
+    let points = spawn_visual(
+        path,
+        &room,
+        &data,
+        origin(&options),
+        options.walk,
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    );
+    if points.is_empty() {
+        return;
+    }
 
+    // Start inside, at eye height near one end, looking along the room.
+    // Percentiles keep outliers such as sky domes from skewing it.
+    let pct = |axis: usize, q: f32| {
+        let mut v: Vec<f32> = points.iter().map(|p| p[axis]).collect();
+        v.sort_by(f32::total_cmp);
+        v[((v.len() - 1) as f32 * q) as usize]
+    };
+    let at = |x: f32, y: f32, z: f32| origin(&options) + Vec3::new(x, y, z) * ROOM_SCALE;
+    let floor = pct(1, 0.05);
+    let (x, z0, z1) = (pct(0, 0.5), pct(2, 0.1), pct(2, 0.9));
+    let eye = at(x, floor, z1) + Vec3::Y * EYE_HEIGHT;
+    let target = at(x, floor, z0) + Vec3::Y * EYE_HEIGHT * 0.6;
+    let spot = at(x, floor, z1 + (z0 - z1) * 0.25);
+    commands.insert_resource(RoomSpot {
+        position: spot,
+        // Models face +Z natively, which is towards the camera here.
+        facing: Quat::IDENTITY,
+    });
+    if options.walk {
+        let doors = start_walking(
+            path,
+            &room,
+            &data,
+            Start::Camera(options.start_camera),
+            &mut state,
+            &mut commands,
+        );
+        if let Some(i) = options.through_door {
+            match doors.door(i) {
+                Some(d) => {
+                    loads.write(LoadRoom {
+                        path: room_path(path, d.room),
+                        arrival: d.arrival,
+                    });
+                }
+                None => error!("--through-door {i}: the room has {} doors", doors.len()),
+            }
+        }
+        return;
+    }
+    // Lights respect render layers too. The room itself is unlit (its
+    // lighting is baked into vertex colours); this lights models in it.
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 6000.0,
+            ..default()
+        },
+        Transform::from_translation(eye + Vec3::new(2.0, 4.0, 0.0)).looking_at(spot, Vec3::Y),
+        RenderLayers::layer(ROOM_LAYER),
+    ));
+    let look = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+    let (yaw, _, _) = look.rotation.to_euler(EulerRot::YXZ);
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            order: 3,
+            ..default()
+        },
+        look,
+        FlyCamera { yaw },
+        RenderLayers::layer(ROOM_LAYER),
+    ));
+}
+
+/// The room's reference visuals (its own meshes, textures and baked vertex
+/// lighting) under one [`RoomRoot`] at `origin`. Returns every vertex in
+/// room space, empty when the room has no geometry.
+#[allow(clippy::too_many_arguments)]
+fn spawn_visual(
+    path: &Path,
+    room: &Room,
+    data: &[u8],
+    origin: Vec3,
+    walk: bool,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+) -> Vec<Vec3> {
     let mut slots = Vec::new();
-    if let Some((bytes, set)) = room.textures(&data) {
+    if let Some((bytes, set)) = room.textures(data) {
         for img in &set.images {
             let material = match set.decode_rgba(bytes, img) {
                 Ok(Some(rgba)) => {
@@ -128,7 +272,8 @@ pub fn load_room(
 
     let root = commands
         .spawn((
-            Transform::from_translation(origin(&options)).with_scale(Vec3::splat(ROOM_SCALE)),
+            RoomRoot,
+            Transform::from_translation(origin).with_scale(Vec3::splat(ROOM_SCALE)),
             Visibility::default(),
         ))
         .id();
@@ -187,7 +332,7 @@ pub fn load_room(
                 .cloned()
                 .unwrap_or_else(|| fallback.clone());
             // Walking, the room shares the main camera's layer with the actors.
-            let layer = if options.walk {
+            let layer = if walk {
                 RenderLayers::default()
             } else {
                 room_layer()
@@ -206,76 +351,37 @@ pub fn load_room(
         path.display(),
         slots.len()
     );
-    if lo.x > hi.x {
-        return;
-    }
-
-    // Start inside, at eye height near one end, looking along the room.
-    // Percentiles keep outliers such as sky domes from skewing it.
-    let pct = |axis: usize, q: f32| {
-        let mut v: Vec<f32> = points.iter().map(|p| p[axis]).collect();
-        v.sort_by(f32::total_cmp);
-        v[((v.len() - 1) as f32 * q) as usize]
-    };
-    let at = |x: f32, y: f32, z: f32| origin(&options) + Vec3::new(x, y, z) * ROOM_SCALE;
-    let floor = pct(1, 0.05);
-    let (x, z0, z1) = (pct(0, 0.5), pct(2, 0.1), pct(2, 0.9));
-    let eye = at(x, floor, z1) + Vec3::Y * EYE_HEIGHT;
-    let target = at(x, floor, z0) + Vec3::Y * EYE_HEIGHT * 0.6;
-    let spot = at(x, floor, z1 + (z0 - z1) * 0.25);
-    commands.insert_resource(RoomSpot {
-        position: spot,
-        // Models face +Z natively, which is towards the camera here.
-        facing: Quat::IDENTITY,
-    });
-    if options.walk {
-        start_walking(
-            &room,
-            &data,
-            options.start_camera,
-            &mut state.sim,
-            &mut commands,
-        );
-        return;
-    }
-    // Lights respect render layers too. The room itself is unlit (its
-    // lighting is baked into vertex colours); this lights models in it.
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 6000.0,
-            ..default()
-        },
-        Transform::from_translation(eye + Vec3::new(2.0, 4.0, 0.0)).looking_at(spot, Vec3::Y),
-        RenderLayers::layer(ROOM_LAYER),
-    ));
-    let look = Transform::from_translation(eye).looking_at(target, Vec3::Y);
-    let (yaw, _, _) = look.rotation.to_euler(EulerRot::YXZ);
-    commands.spawn((
-        Camera3d::default(),
-        Camera {
-            order: 3,
-            ..default()
-        },
-        look,
-        FlyCamera { yaw },
-        RenderLayers::layer(ROOM_LAYER),
-    ));
+    points
 }
 
 /// Put the sim on the room's collision, the actors on its floor, and its
-/// cameras in charge of the view. The player starts in `start_camera`'s zone,
-/// or else in the first zone with a floor.
+/// cameras and doors in charge. Returns the doors.
 fn start_walking(
+    path: &Path,
     room: &Room,
     data: &[u8],
-    start_camera: Option<usize>,
-    sim: &mut Sim,
+    start: Start,
+    state: &mut SimState,
     commands: &mut Commands,
-) {
+) -> RoomDoors {
     let s = ROOM_SCALE;
+    let doors = match room.triggers(data) {
+        Ok(t) => RoomDoors::new(&t),
+        Err(e) => {
+            info!("--walk: no triggers ({e}), so no doors");
+            RoomDoors::default()
+        }
+    };
+    commands.insert_resource(ActiveRoom {
+        path: path.to_path_buf(),
+        doors: doors.clone(),
+    });
     let collision = match room.collision(data) {
         Ok(c) => c,
-        Err(e) => return error!("--walk: no collision ({e})"),
+        Err(e) => {
+            error!("--walk: no collision ({e})");
+            return doors;
+        }
     };
     let world = World::new(
         collision
@@ -296,17 +402,29 @@ fn start_walking(
             .ground(m, 0.0, 1e4)
             .map(|g| V3::new(m.x, g.height, m.z))
     };
-    let start = match start_camera {
-        Some(i) => match director.cameras.get(i) {
+    let start = match start {
+        Start::Camera(Some(i)) => match director.cameras.get(i) {
             Some(c) => floor_in(c),
             None => {
-                return error!(
+                error!(
                     "--start-camera {i}: the room has {} cameras",
                     director.cameras.len()
                 );
+                return doors;
             }
         },
-        None => director.cameras.iter().find_map(floor_in),
+        Start::Camera(None) => director.cameras.iter().find_map(floor_in),
+        Start::Arrival(a) => {
+            let p = V3::new(a[0] * s, a[1] * s, a[2] * s);
+            // Onto the floor under the point; most arrivals lie on one.
+            let floor = world
+                .ground(p, 1.0, 4.0)
+                .map(|g| V3::new(p.x, g.height, p.z));
+            if floor.is_none() {
+                warn!("arrival {a:?} has no floor under it; starting in a camera zone");
+            }
+            floor.or_else(|| director.cameras.iter().find_map(floor_in))
+        }
     };
     let start = start.or_else(|| {
         world
@@ -316,8 +434,10 @@ fn start_walking(
             .map(|t| (t.a + t.b + t.c) * (1.0 / 3.0))
     });
     let Some(start) = start else {
-        return error!("--walk: the room has no floor");
+        error!("--walk: the room has no floor");
+        return doors;
     };
+    let sim = &mut state.sim;
     sim.world = Some(world);
     for (i, a) in sim.actors.iter_mut().enumerate() {
         // The player at the start, the others a few steps away; everyone
@@ -332,14 +452,85 @@ fn start_walking(
         a.grounded = false;
     }
     info!(
-        "--walk: {} collision triangles, {} cameras, start {start:?}",
+        "--walk: {} collision triangles, {} cameras, {} doors, start {start:?}",
         sim.world.as_ref().map_or(0, |w| w.triangles().len()),
-        director.cameras.len()
+        director.cameras.len(),
+        doors.len()
     );
+    state.reset_interpolation();
     commands.insert_resource(RoomCams {
         director,
         active: None,
     });
+    doors
+}
+
+/// Send the player through a door they walk into.
+fn use_doors(
+    state: Res<SimState>,
+    room: Option<ResMut<ActiveRoom>>,
+    mut loads: MessageWriter<LoadRoom>,
+) {
+    let Some(mut room) = room else { return };
+    let p = state.sim.player().pos * (1.0 / ROOM_SCALE);
+    let Some(door) = room.doors.update([p.x, p.y, p.z]) else {
+        return;
+    };
+    let path = room_path(&room.path, door.room);
+    if path.is_file() {
+        info!("door to {}", room_name(door.room));
+        loads.write(LoadRoom {
+            path,
+            arrival: door.arrival,
+        });
+    } else {
+        warn!(
+            "the door to {} leads nowhere: {} is missing",
+            room_name(door.room),
+            path.display()
+        );
+    }
+}
+
+/// Replace the walked room: new visuals, collision, cameras and doors, and
+/// the actors at the arrival point.
+fn change_room(
+    mut loads: MessageReader<LoadRoom>,
+    mut state: ResMut<SimState>,
+    roots: Query<Entity, With<RoomRoot>>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Some(load) = loads.read().last().cloned() else {
+        return;
+    };
+    let Some((room, data)) = read_room(&load.path) else {
+        return;
+    };
+    for root in &roots {
+        commands.entity(root).despawn();
+    }
+    spawn_visual(
+        &load.path,
+        &room,
+        &data,
+        Vec3::ZERO,
+        true,
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    );
+    start_walking(
+        &load.path,
+        &room,
+        &data,
+        Start::Arrival(load.arrival),
+        &mut state,
+        &mut commands,
+    );
 }
 
 fn fly(

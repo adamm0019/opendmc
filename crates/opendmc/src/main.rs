@@ -3,7 +3,8 @@
 //! ```text
 //! opendmc [--profile original|enhanced] [--model <your model file>
 //!         [--motion <section>:<index>] [--focus]] [--room <your .fsd>]
-//!         [--avatar <your pl00.pld>] [--walk [--start-camera N]] [--record <tape>]
+//!         [--avatar <your pl00.pld>] [--walk [--start-camera N] [--through-door N]]
+//!         [--record <tape>]
 //!         [--demo] [--screenshot <png> [--at-tick N]]
 //! ```
 //!
@@ -13,7 +14,8 @@
 //! the arena, skinned; `--motion` plays one of its motions and `--focus` adds
 //! a close-up view of it. `--room` shows one of your rooms; add `--walk` to
 //! play in it, on its collision and under its own cameras (`--start-camera`
-//! starts in that camera's zone).
+//! starts in that camera's zone). Its doors lead to the rooms beside it, read
+//! from the same folder; `--through-door` takes one straight away.
 
 mod asset_view;
 mod avatar;
@@ -21,6 +23,7 @@ mod cameras;
 mod capture;
 mod play;
 mod room_cameras;
+mod room_doors;
 mod room_view;
 
 use bevy::prelude::*;
@@ -46,6 +49,8 @@ pub struct Options {
     pub walk: bool,
     /// With `walk`: start in this room camera's zone.
     pub start_camera: Option<usize>,
+    /// With `walk`: go straight through this door of the room.
+    pub through_door: Option<usize>,
     pub record: Option<PathBuf>,
     /// Drive the player from the built-in script (`capture::demo_input`).
     pub demo: bool,
@@ -79,6 +84,13 @@ fn parse_args() -> Result<Options, String> {
                         .ok_or("--start-camera needs a camera index")?,
                 )
             }
+            "--through-door" => {
+                o.through_door = Some(
+                    args.next()
+                        .and_then(|n| n.parse().ok())
+                        .ok_or("--through-door needs a door index")?,
+                )
+            }
             "--grid" => o.grid = Some(args.next().ok_or("--grid needs section[:first]")?),
             "--record" => o.record = Some(args.next().ok_or("--record needs a path")?.into()),
             "--demo" => o.demo = true,
@@ -93,7 +105,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "-h" | "--help" => {
                 println!(
-                    "opendmc [--profile original|enhanced] [--model <file> [--motion <s>:<i>] [--focus]] [--room <file.fsd> [--walk [--start-camera N]]] [--avatar <pl00.pld>] [--record <tape.odt>] \\
+                    "opendmc [--profile original|enhanced] [--model <file> [--motion <s>:<i>] [--focus]] [--room <file.fsd> [--walk [--start-camera N] [--through-door N]]] [--avatar <pl00.pld>] [--record <tape.odt>] \\
                      [--demo] [--screenshot <png> [--at-tick N]]"
                 );
                 std::process::exit(0);
@@ -106,6 +118,9 @@ fn parse_args() -> Result<Options, String> {
     }
     if o.start_camera.is_some() && !o.walk {
         return Err("--start-camera needs --walk".into());
+    }
+    if o.through_door.is_some() && !o.walk {
+        return Err("--through-door needs --walk".into());
     }
     Ok(o)
 }
