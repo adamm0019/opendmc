@@ -11,6 +11,7 @@
 //! comes from the room's own data.
 
 use crate::Options;
+use crate::content::{self, RoomManifest};
 use crate::play::{RoomCams, SimState};
 use crate::render::{Look, set_room_look};
 use crate::room_cameras::{RoomCamera, RoomDirector};
@@ -123,6 +124,7 @@ fn read_room(path: &Path) -> Option<(Room, Vec<u8>)> {
 #[allow(clippy::too_many_arguments)]
 pub fn load_room(
     options: Res<Options>,
+    assets: Res<AssetServer>,
     mut state: ResMut<SimState>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -134,18 +136,25 @@ pub fn load_room(
     let Some((room, data)) = read_room(path) else {
         return;
     };
-    let points = spawn_visual(
-        path,
-        &room,
-        &data,
-        origin(&options),
-        options.walk,
-        options.look == Look::Modern,
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &mut images,
-    );
+    let points = match modern_manifest(&options, path) {
+        Some(m) => {
+            let scene = content::spawn_scene(&mut commands, &assets, path, &m);
+            commands.entity(scene).insert(RoomRoot);
+            room_points(&room)
+        }
+        None => spawn_visual(
+            path,
+            &room,
+            &data,
+            origin(&options),
+            options.walk,
+            options.look == Look::Modern,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+        ),
+    };
     if points.is_empty() {
         return;
     }
@@ -218,6 +227,31 @@ pub fn load_room(
         FlyCamera { yaw },
         RenderLayers::layer(ROOM_LAYER),
     ));
+}
+
+/// The room's rebuilt visuals, when it has them: only when walking in the
+/// modern look with a content store holding the room's manifest.
+fn modern_manifest(options: &Options, room: &Path) -> Option<RoomManifest> {
+    if !options.walk || options.look != Look::Modern {
+        return None;
+    }
+    content::read_manifest(options.content.as_deref()?, room)
+}
+
+/// Every vertex of the room's own geometry, in room units. Layout (bounds,
+/// start spots) always comes from here, whatever draws the room.
+fn room_points(room: &Room) -> Vec<Vec3> {
+    room.geometry
+        .objects
+        .iter()
+        .flat_map(|o| {
+            o.meshes.iter().flat_map(move |m| {
+                m.positions
+                    .iter()
+                    .map(move |p| Vec3::from_array(o.to_room(*p)))
+            })
+        })
+        .collect()
 }
 
 /// Most of a room, in metres at `origin`: the 1st to 99th percentile of its
@@ -521,6 +555,7 @@ fn use_doors(
 #[allow(clippy::too_many_arguments)]
 fn change_room(
     options: Res<Options>,
+    assets: Res<AssetServer>,
     mut loads: MessageReader<LoadRoom>,
     mut state: ResMut<SimState>,
     roots: Query<Entity, With<RoomRoot>>,
@@ -538,18 +573,25 @@ fn change_room(
     for root in &roots {
         commands.entity(root).despawn();
     }
-    let points = spawn_visual(
-        &load.path,
-        &room,
-        &data,
-        Vec3::ZERO,
-        true,
-        options.look == Look::Modern,
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &mut images,
-    );
+    let points = match modern_manifest(&options, &load.path) {
+        Some(m) => {
+            let scene = content::spawn_scene(&mut commands, &assets, &load.path, &m);
+            commands.entity(scene).insert(RoomRoot);
+            room_points(&room)
+        }
+        None => spawn_visual(
+            &load.path,
+            &room,
+            &data,
+            Vec3::ZERO,
+            true,
+            options.look == Look::Modern,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+        ),
+    };
     if !points.is_empty() {
         set_room_look(
             &mut commands,

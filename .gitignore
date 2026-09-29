@@ -32,3 +32,6 @@ inventory.json
 *.bank
 *.ip2
 *.itm
+
+# Python bytecode from the Blender tools.
+__pycache__/

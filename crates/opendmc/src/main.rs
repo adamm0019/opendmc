@@ -22,6 +22,7 @@ mod asset_view;
 mod avatar;
 mod cameras;
 mod capture;
+mod content;
 mod play;
 mod render;
 mod room_cameras;
@@ -151,20 +152,24 @@ fn main() {
     } else {
         Rules::original()
     };
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "OpenDMC".into(),
-                ..default()
-            }),
+    let mut app = App::new();
+    // Asset sources must exist before the asset plugin starts.
+    if let Some(store) = &options.content {
+        content::register_source(&mut app, store);
+    }
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "OpenDMC".into(),
             ..default()
-        }))
-        .add_plugins(render::RenderPlugin { look: options.look })
-        .insert_resource(options)
-        .add_plugins(play::PlayPlugin { rules })
-        .add_plugins(asset_view::AssetViewPlugin)
-        .add_plugins(room_view::RoomViewPlugin)
-        .add_plugins(avatar::AvatarPlugin)
-        .add_plugins(capture::CapturePlugin)
-        .run();
+        }),
+        ..default()
+    }))
+    .add_plugins(render::RenderPlugin { look: options.look })
+    .insert_resource(options)
+    .add_plugins(play::PlayPlugin { rules })
+    .add_plugins(asset_view::AssetViewPlugin)
+    .add_plugins(room_view::RoomViewPlugin)
+    .add_plugins(avatar::AvatarPlugin)
+    .add_plugins(capture::CapturePlugin)
+    .run();
 }

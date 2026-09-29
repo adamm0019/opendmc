@@ -3,7 +3,8 @@
     blender --background --python reference_room.py -- --room-dir <store>/rooms/r100
 
 Reads `<room-dir>/reference/<room>.glb` (+ `.collision.glb`, `.cameras.json`,
-`.triggers.json`, `.props.glb`), all written by `dmc room`, and saves
+`.triggers.json`, `.lights.json`, `.props.glb`), all written by `dmc room`,
+and saves
 `<room-dir>/<room>.blend` in metres (ADR-010) with:
 
 - locked, unrenderable collections holding the original's data:
@@ -11,9 +12,11 @@ Reads `<room-dir>/reference/<room>.glb` (+ `.collision.glb`, `.cameras.json`,
   Blender camera per original camera, framed as the engine frames it for a
   player standing in the middle of its zone, plus its zone and rails) and
   `gameplay_triggers` (trigger volumes, doors tagged with their target room);
-- the empty modern collections the export picks up: `architecture`,
+- the modern collections the export picks up: `architecture`,
   `props_static`, `props_dynamic`, `doors`, `destructibles`, `decals`,
   `lights`, `reflection_probes`, `gi_probes`, `fog_volumes`, `audio_zones`.
+  They start empty except `lights`, which starts from the original's own
+  light rig (sections 4/5), and a world lit by the original ambient.
 
 Everything here is derived from the user's own files, so the .blend stays in
 the private content store (policy rule 6, ADR-009).
@@ -237,6 +240,41 @@ def add_triggers(triggers, into):
             obj["arrival_room_units"] = list(t["point"])
 
 
+def srgb_to_linear(c):
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+# Watts per square metre of the original's near falloff distance: a starting
+# brightness for each original light, to be art-directed from there.
+POWER_PER_NEAR_M2 = 40.0
+
+
+def add_original_lights(sets, into):
+    """The first light set of section 4 (docs/formats/README.md §4h) as the
+    starting rig: kinds 3 and 4 become point lights with the original colour
+    and a power scaled from the stored near falloff distance. Their source is
+    recorded so the art pass can tell them from new lights. Returns the set's
+    ambient, key and fog for the scene's properties."""
+    first = sets["4"][0] if "4" in sets else next(iter(sets.values()))[0]
+    for light in first["lights"]:
+        if light["kind"] not in (3, 4):
+            continue
+        near_m = light["near"] / ROOM_UNITS_PER_METRE
+        data = bpy.data.lights.new(f"orig_light{light['index']:02}", "POINT")
+        data.color = [srgb_to_linear(c / 255.0) for c in light["colour"]]
+        data.energy = POWER_PER_NEAR_M2 * max(near_m, 0.5) ** 2
+        data.shadow_soft_size = 0.15
+        obj = bpy.data.objects.new(data.name, data)
+        obj.location = to_blender(light["position"])
+        obj["source"] = "original"
+        obj["kind"] = light["kind"]
+        obj["near_m"] = near_m
+        obj["far_m"] = light["far"] / ROOM_UNITS_PER_METRE
+        obj["colour_255"] = list(light["colour"])
+        into.objects.link(obj)
+    return first
+
+
 def main():
     a = args()
     room_dir = os.path.abspath(a.room_dir)
@@ -264,6 +302,19 @@ def main():
     trig_path = os.path.join(ref, f"{room}.triggers.json")
     if os.path.exists(trig_path):
         add_triggers(json.load(open(trig_path))["triggers"], cols["gameplay_triggers"])
+    lights_path = os.path.join(ref, f"{room}.lights.json")
+    if os.path.exists(lights_path):
+        first = add_original_lights(json.load(open(lights_path)), cols["lights"])
+        scene["original_ambient_255"] = list(first["ambient"])
+        scene["original_key_255"] = list(first["key"])
+        scene["original_fog"] = json.dumps(first["fog"])
+        world = bpy.data.worlds.new(f"{room}_world")
+        world.use_nodes = True
+        bg = world.node_tree.nodes["Background"]
+        bg.inputs["Color"].default_value = (
+            *[srgb_to_linear(c / 255.0) for c in first["ambient"]], 1.0)
+        bg.inputs["Strength"].default_value = 1.0
+        scene.world = world
     props_path = os.path.join(ref, f"{room}.props.glb")
     if os.path.exists(props_path):
         sheet = collection("props_sheet", cols["reference"])
