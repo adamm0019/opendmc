@@ -3,6 +3,7 @@
 //! machines without the game skip them. Nothing from the game is written.
 
 use dmc_formats::room::Room;
+use dmc_formats::triggers::room_name;
 use dmc_sim::input::InputFrame;
 use dmc_sim::sim::PLAYER;
 use dmc_sim::world::{ROOM_UNITS_PER_SIM_UNIT, World};
@@ -66,7 +67,7 @@ fn every_room_parses() {
         if let Ok(t) = room.triggers(data) {
             for (_, d) in t.doors() {
                 doors += 1;
-                door_targets += names.contains(&dmc_formats::triggers::room_name(d.room)) as usize;
+                door_targets += names.contains(&room_name(d.room)) as usize;
             }
         }
         if let Some(section) = room.section(data, dmc_formats::props::SECTION) {
@@ -88,11 +89,76 @@ fn every_room_parses() {
     assert_eq!(polys, 62_614);
     assert_eq!(cameras, 1_575);
     // Four doors name rooms that are not in the archive (r00f, r105, r20a).
-    assert_eq!((doors, door_targets), (220, 216));
+    assert_eq!((doors, door_targets), (DOORS, DOORS - 4));
     assert_eq!(props, 1_190);
     // Read with the right layout, normals are unit length. The exceptions
     // are one 112-vertex model (three copies each in r408 and r40b).
     assert_eq!(unit_normals, 1_184);
+}
+
+/// Records with sub-kind 0 and a room id, over kinds 1, 2, 3 and 7.
+const DOORS: usize = 249;
+
+fn stem(name: &str) -> String {
+    name.rsplit('/')
+        .next()
+        .unwrap()
+        .trim_end_matches(".fsd")
+        .to_lowercase()
+}
+
+/// Doors lead somewhere sensible: the player arrives on a floor in the room
+/// named, and usually beside a door back.
+#[test]
+fn doors_arrive_on_floors_beside_a_door_back() {
+    let Some(rooms) = rooms() else {
+        eprintln!("OPENDMC_GAME_DIR not set; skipped");
+        return;
+    };
+    let s = 1.0 / ROOM_UNITS_PER_SIM_UNIT;
+    let by_name: std::collections::HashMap<String, &Vec<u8>> =
+        rooms.iter().map(|(n, d)| (stem(n), d)).collect();
+    let (mut doors, mut on_floor, mut with_back, mut beside_back) = (0, 0, 0, 0);
+    for (name, data) in &rooms {
+        let from = stem(name);
+        let Ok(triggers) = Room::parse(data).unwrap().triggers(data) else {
+            continue;
+        };
+        for (_, door) in triggers.doors() {
+            let Some(target) = by_name.get(&room_name(door.room)) else {
+                continue;
+            };
+            doors += 1;
+            let room = Room::parse(target).unwrap();
+            let col = room.collision(target).unwrap();
+            let world = World::new(
+                col.triangles()
+                    .map(|(t, flags)| (t.map(|p| V3::new(p[0] * s, p[1] * s, p[2] * s)), flags)),
+                2.0,
+            );
+            let [x, y, z] = door.arrival;
+            let reach = 150.0 * s;
+            on_floor += world
+                .ground(V3::new(x * s, y * s, z * s), reach, reach)
+                .is_some() as usize;
+            let Ok(back) = room.triggers(target) else {
+                continue;
+            };
+            let backs: Vec<_> = back
+                .doors()
+                .filter(|(_, d)| room_name(d.room) == from)
+                .collect();
+            with_back += !backs.is_empty() as usize;
+            beside_back += backs
+                .iter()
+                .any(|(t, _)| t.volume.contains(door.arrival, 800.0))
+                as usize;
+        }
+    }
+    assert_eq!(doors, DOORS - 4);
+    // Within 150 units of a floor; a door back in the target room; the
+    // arrival within 800 units of that door's volume.
+    assert_eq!((on_floor, with_back, beside_back), (203, 205, 134));
 }
 
 #[test]

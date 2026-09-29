@@ -53,9 +53,9 @@ impl Volume {
 pub struct Trigger {
     /// Record index (0–63).
     pub index: usize,
-    /// Head byte 0: 2 and 3 include doors; 7 is another family.
+    /// Head byte 0: 1, 2, 3 or 7 (meaning unknown; doors occur in all four).
     pub kind: u8,
-    /// Head byte 1: 0 for doors.
+    /// Head byte 1: 0 for doors, 1-14 for other triggers.
     pub sub: u8,
     /// Head bytes 2 and 3 (flag-like: `0x11`, `0x21`, `0x91`, `0xA1`, `0xC1`).
     pub flags: [u8; 2],
@@ -79,8 +79,9 @@ pub struct Door {
 }
 
 impl Trigger {
+    /// A door is a record with sub-kind 0 and a room id, whatever its kind.
     pub fn door(&self) -> Option<Door> {
-        (matches!(self.kind, 2 | 3) && self.sub == 0 && self.room != 0).then_some(Door {
+        (self.sub == 0 && self.room != 0).then_some(Door {
             room: self.room,
             arrival: self.point,
         })
