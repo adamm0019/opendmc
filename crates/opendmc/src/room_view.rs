@@ -12,6 +12,7 @@
 
 use crate::Options;
 use crate::play::{RoomCams, SimState};
+use crate::render::{Look, set_room_look};
 use crate::room_cameras::{RoomCamera, RoomDirector};
 use crate::room_doors::{RoomDoors, room_path};
 use bevy::asset::RenderAssetUsages;
@@ -22,7 +23,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use dmc_formats::room::Room;
 use dmc_formats::triggers::room_name;
 use dmc_sim::V3;
-use dmc_sim::world::World;
+use dmc_sim::world::{ROOM_UNITS_PER_METRE, World};
 use std::path::{Path, PathBuf};
 
 pub struct RoomViewPlugin;
@@ -63,9 +64,8 @@ enum Start {
     Arrival([f32; 3]),
 }
 
-/// Room units per metre-ish sim unit: Dante is ~900 units tall and the sim's
-/// figure 2 (the same scale as `--model`).
-pub const ROOM_SCALE: f32 = 2.0 / 900.0;
+/// Metres per room unit (ADR-010), the same scale as `--model`.
+pub const ROOM_SCALE: f32 = 1.0 / ROOM_UNITS_PER_METRE;
 /// Far from the arena so the two never overlap.
 const ROOM_ORIGIN: Vec3 = Vec3::new(400.0, 0.0, 0.0);
 /// Vertex colours are stored with 0x80 as full brightness (provisional,
@@ -73,7 +73,7 @@ const ROOM_ORIGIN: Vec3 = Vec3::new(400.0, 0.0, 0.0);
 const COLOUR_ONE: f32 = 128.0;
 /// Rooms and their camera live on their own layer, apart from the arena.
 const ROOM_LAYER: usize = 1;
-/// Eye height above the floor, in sim units (the figure is 2 tall).
+/// Eye height above the floor, in metres (the figure is 2 tall).
 const EYE_HEIGHT: f32 = 1.7;
 
 /// Where a model loaded alongside the room should stand: on the floor in
@@ -140,6 +140,7 @@ pub fn load_room(
         &data,
         origin(&options),
         options.walk,
+        options.look == Look::Modern,
         &mut commands,
         &mut meshes,
         &mut materials,
@@ -148,6 +149,12 @@ pub fn load_room(
     if points.is_empty() {
         return;
     }
+    set_room_look(
+        &mut commands,
+        &options,
+        path,
+        bounds(&points, origin(&options)),
+    );
 
     // Start inside, at eye height near one end, looking along the room.
     // Percentiles keep outliers such as sky domes from skewing it.
@@ -213,9 +220,22 @@ pub fn load_room(
     ));
 }
 
-/// The room's reference visuals (its own meshes, textures and baked vertex
-/// lighting) under one [`RoomRoot`] at `origin`. Returns every vertex in
-/// room space, empty when the room has no geometry.
+/// Most of a room, in metres at `origin`: the 1st to 99th percentile of its
+/// vertices on each axis, so sky domes and stray far geometry don't count.
+fn bounds(points: &[Vec3], origin: Vec3) -> (Vec3, Vec3) {
+    let pct = |axis: usize, q: f32| {
+        let mut v: Vec<f32> = points.iter().map(|p| p[axis]).collect();
+        v.sort_by(f32::total_cmp);
+        v[((v.len() - 1) as f32 * q) as usize]
+    };
+    let at = |q: f32| origin + Vec3::new(pct(0, q), pct(1, q), pct(2, q)) * ROOM_SCALE;
+    (at(0.01), at(0.99))
+}
+
+/// The room's reference visuals (its own meshes and textures) under one
+/// [`RoomRoot`] at `origin`. Unlit with the original's baked vertex lighting,
+/// or `lit` by the modern stack without it. Returns every vertex in room
+/// space, empty when the room has no geometry.
 #[allow(clippy::too_many_arguments)]
 fn spawn_visual(
     path: &Path,
@@ -223,6 +243,7 @@ fn spawn_visual(
     data: &[u8],
     origin: Vec3,
     walk: bool,
+    lit: bool,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -247,7 +268,9 @@ fn spawn_visual(
                     StandardMaterial {
                         base_color_texture: Some(images.add(image)),
                         alpha_mode: AlphaMode::Mask(0.5),
-                        unlit: true,
+                        unlit: !lit,
+                        perceptual_roughness: 0.8,
+                        reflectance: 0.3,
                         double_sided: true,
                         cull_mode: None,
                         ..default()
@@ -255,7 +278,7 @@ fn spawn_visual(
                 }
                 _ => StandardMaterial {
                     base_color: Color::srgb(0.8, 0.0, 0.8),
-                    unlit: true,
+                    unlit: !lit,
                     ..default()
                 },
             };
@@ -264,7 +287,7 @@ fn spawn_visual(
     }
     let fallback = materials.add(StandardMaterial {
         base_color: Color::srgb(0.6, 0.6, 0.6),
-        unlit: true,
+        unlit: !lit,
         double_sided: true,
         cull_mode: None,
         ..default()
@@ -322,7 +345,8 @@ fn spawn_visual(
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, m.positions.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, m.normals.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, m.uvs.clone());
-            if colours.len() == m.positions.len() {
+            // Lit, the modern stack does the lighting the colours baked in.
+            if !lit && colours.len() == m.positions.len() {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
             }
             triangles += tris.len();
@@ -494,7 +518,9 @@ fn use_doors(
 
 /// Replace the walked room: new visuals, collision, cameras and doors, and
 /// the actors at the arrival point.
+#[allow(clippy::too_many_arguments)]
 fn change_room(
+    options: Res<Options>,
     mut loads: MessageReader<LoadRoom>,
     mut state: ResMut<SimState>,
     roots: Query<Entity, With<RoomRoot>>,
@@ -512,17 +538,26 @@ fn change_room(
     for root in &roots {
         commands.entity(root).despawn();
     }
-    spawn_visual(
+    let points = spawn_visual(
         &load.path,
         &room,
         &data,
         Vec3::ZERO,
         true,
+        options.look == Look::Modern,
         &mut commands,
         &mut meshes,
         &mut materials,
         &mut images,
     );
+    if !points.is_empty() {
+        set_room_look(
+            &mut commands,
+            &options,
+            &load.path,
+            bounds(&points, Vec3::ZERO),
+        );
+    }
     start_walking(
         &load.path,
         &room,

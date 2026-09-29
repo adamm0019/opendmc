@@ -6,7 +6,7 @@ use dmc_formats::room::Room;
 use dmc_formats::triggers::room_name;
 use dmc_sim::input::InputFrame;
 use dmc_sim::sim::PLAYER;
-use dmc_sim::world::{ROOM_UNITS_PER_SIM_UNIT, World};
+use dmc_sim::world::{ROOM_UNITS_PER_METRE, World};
 use dmc_sim::{Rules, Sim, V3};
 use std::io::Read;
 use std::path::PathBuf;
@@ -115,7 +115,7 @@ fn doors_arrive_on_floors_beside_a_door_back() {
         eprintln!("OPENDMC_GAME_DIR not set; skipped");
         return;
     };
-    let s = 1.0 / ROOM_UNITS_PER_SIM_UNIT;
+    let s = 1.0 / ROOM_UNITS_PER_METRE;
     let by_name: std::collections::HashMap<String, &Vec<u8>> =
         rooms.iter().map(|(n, d)| (stem(n), d)).collect();
     let (mut doors, mut on_floor, mut with_back, mut beside_back) = (0, 0, 0, 0);
@@ -167,7 +167,7 @@ fn the_player_stays_on_real_floors() {
         eprintln!("OPENDMC_GAME_DIR not set; skipped");
         return;
     };
-    let s = 1.0 / ROOM_UNITS_PER_SIM_UNIT;
+    let s = 1.0 / ROOM_UNITS_PER_METRE;
     let (mut runs, mut left) = (0, Vec::new());
     for (name, data) in &rooms {
         let room = Room::parse(data).unwrap();

@@ -1,17 +1,19 @@
-//! Static room collision for the sim: triangles in sim units, a uniform grid
+//! Static room collision for the sim: triangles in metres, a uniform grid
 //! over X/Z, and the queries the character controller needs (the ground
 //! under a point, and pushing a body out of walls).
 //!
 //! The sim never reads files: callers build a [`World`] from plain
 //! triangles (the viewer converts a room's collision polygons, dividing room
-//! units by [`ROOM_UNITS_PER_SIM_UNIT`]). Every query visits triangles in a
+//! units by [`ROOM_UNITS_PER_METRE`]). Every query visits triangles in a
 //! fixed order and uses only `+ - * /` and `sqrt`, so results are
 //! bit-identical across builds.
 
 use crate::math::V3;
 
-/// Rooms measure Dante at about 900 units; the sim at 2.
-pub const ROOM_UNITS_PER_SIM_UNIT: f32 = 450.0;
+/// The one unit conversion (ADR-010): a sim and world unit is a metre, and a
+/// metre is 450 of the original's room units, so Dante (about 900) stands 2
+/// tall. The renderer, the exports and the Blender scripts all use this.
+pub const ROOM_UNITS_PER_METRE: f32 = 450.0;
 
 /// Surfaces whose normal points at least this far up are ground (about 45°).
 pub const GROUND_MIN_NORMAL_Y: f32 = 0.7;

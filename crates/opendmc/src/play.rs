@@ -7,6 +7,7 @@
 
 use crate::Options;
 use crate::cameras::{CameraSet, TRAINING_ROOM};
+use crate::render::Look;
 use crate::room_cameras::RoomDirector;
 use bevy::prelude::*;
 use dmc_sim::actor::{State, Team};
@@ -112,7 +113,7 @@ pub struct ActorVisual(pub usize);
 struct Hud;
 
 #[derive(Component)]
-struct MainCamera;
+pub struct MainCamera;
 
 fn positions(sim: &Sim) -> Vec<V3> {
     sim.actors.iter().map(|a| a.pos).collect()
@@ -133,6 +134,17 @@ fn setup_scene(
         spawn_arena(&mut commands, &mut meshes, &mut materials, &state);
     }
     spawn_actors(&mut commands, &mut meshes, &mut materials, &state);
+    // The modern look brings its own light (`render`).
+    if options.look == Look::Reference {
+        commands.spawn((
+            DirectionalLight {
+                shadows_enabled: true,
+                illuminance: 9000.0,
+                ..default()
+            },
+            Transform::from_xyz(6.0, 12.0, -4.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ));
+    }
 }
 
 /// The graybox floor, pillars and tiles (not used when walking a room).
@@ -206,14 +218,6 @@ fn spawn_actors(
             });
     }
 
-    commands.spawn((
-        DirectionalLight {
-            shadows_enabled: true,
-            illuminance: 9000.0,
-            ..default()
-        },
-        Transform::from_xyz(6.0, 12.0, -4.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
     commands.spawn((
         MainCamera,
         Camera3d::default(),

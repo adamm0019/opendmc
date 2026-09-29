@@ -16,7 +16,7 @@ use dmc_formats::camera::{Camera, HAS_RAILS};
 use dmc_sim::V3;
 
 /// Where a camera without a stored eye views from, relative to the player,
-/// in sim units.
+/// in metres.
 const FALLBACK_OFFSET: V3 = V3::new(0.0, 4.0, -7.0);
 
 #[derive(Debug, Clone)]

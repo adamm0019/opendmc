@@ -1,7 +1,8 @@
 //! OpenDMC game shell.
 //!
 //! ```text
-//! opendmc [--profile original|enhanced] [--model <your model file>
+//! opendmc [--profile original|enhanced] [--look modern|reference] [--content <dir>]
+//!         [--model <your model file>
 //!         [--motion <section>:<index>] [--focus]] [--room <your .fsd>]
 //!         [--avatar <your pl00.pld>] [--walk [--start-camera N] [--through-door N]]
 //!         [--record <tape>]
@@ -22,17 +23,23 @@ mod avatar;
 mod cameras;
 mod capture;
 mod play;
+mod render;
 mod room_cameras;
 mod room_doors;
 mod room_view;
 
 use bevy::prelude::*;
 use dmc_sim::Rules;
+use render::Look;
 use std::path::PathBuf;
 
 #[derive(Resource, Clone, Default)]
 pub struct Options {
     pub enhanced: bool,
+    /// `--look modern|reference` (docs/REMAKE.md §3).
+    pub look: Look,
+    /// The private content store (ADR-009): rebuilt visuals and room looks.
+    pub content: Option<PathBuf>,
     pub model: Option<PathBuf>,
     /// `section:index` of a motion in the model's own banks.
     pub motion: Option<String>,
@@ -61,6 +68,7 @@ pub struct Options {
 fn parse_args() -> Result<Options, String> {
     let mut o = Options {
         at_tick: 60,
+        content: std::env::var_os("OPENDMC_CONTENT").map(PathBuf::from),
         ..Options::default()
     };
     let mut args = std::env::args().skip(1);
@@ -71,6 +79,14 @@ fn parse_args() -> Result<Options, String> {
                 Some("enhanced") => o.enhanced = true,
                 other => return Err(format!("unknown profile {other:?}")),
             },
+            "--look" => {
+                o.look = args
+                    .next()
+                    .as_deref()
+                    .and_then(Look::parse)
+                    .ok_or("--look needs modern or reference")?
+            }
+            "--content" => o.content = Some(args.next().ok_or("--content needs a path")?.into()),
             "--model" => o.model = Some(args.next().ok_or("--model needs a path")?.into()),
             "--motion" => o.motion = Some(args.next().ok_or("--motion needs section:index")?),
             "--focus" => o.focus = true,
@@ -105,7 +121,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "-h" | "--help" => {
                 println!(
-                    "opendmc [--profile original|enhanced] [--model <file> [--motion <s>:<i>] [--focus]] [--room <file.fsd> [--walk [--start-camera N] [--through-door N]]] [--avatar <pl00.pld>] [--record <tape.odt>] \\
+                    "opendmc [--profile original|enhanced] [--look modern|reference] [--content <dir>] [--model <file> [--motion <s>:<i>] [--focus]] [--room <file.fsd> [--walk [--start-camera N] [--through-door N]]] [--avatar <pl00.pld>] [--record <tape.odt>] \\
                      [--demo] [--screenshot <png> [--at-tick N]]"
                 );
                 std::process::exit(0);
@@ -143,6 +159,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(render::RenderPlugin { look: options.look })
         .insert_resource(options)
         .add_plugins(play::PlayPlugin { rules })
         .add_plugins(asset_view::AssetViewPlugin)

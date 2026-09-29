@@ -432,9 +432,13 @@ reference geometry. It must meet each of these:
 1. **Doors.** `--walk` crosses between `r100` and its neighbours through
    runtime room loading (the lifecycle in §2.3). *Done 2026-09-29.*
 2. **Units.** One shared metre constant; the sim, renderer and exports agree.
+   *Done 2026-09-29: `dmc_sim::world::ROOM_UNITS_PER_METRE`.*
 3. **Modern look.** `--look modern` uses the HDR deferred stack from §3:
    shadows, SSAO, SSR, TAA, bloom, clamped exposure and grading. It is driven
    by a per-room `look.ron`, with the reference look kept alongside.
+   *Stack in place 2026-09-29 (`opendmc::render`, `data/looks/default.ron`,
+   `--look`, `--content`). The rooms are lit only by the moon and an ambient
+   term until item 6 bakes their lighting.*
 4. **Content store.** It holds a manifest loader and falls back to the
    reference look.
 5. **Blender kit.** `reference_room.py` builds `r100.blend` with the §1
