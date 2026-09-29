@@ -69,7 +69,8 @@ It is a modern graphical remake:
 ## Architectural decision log
 
 ### ADR-001: Rust workspace split into formats / sim / cli / game
-*Status: accepted, Phase 0.*
+*Status: accepted, Phase 0; amended by ADR-014 (the game moves to Unreal;
+this workspace becomes the toolchain, and `opendmc` is frozen).*
 Parsers and gameplay rules are pure libraries with no engine dependency, so
 both can be tested, fuzzed and replayed headless. Only the `opendmc` crate
 depends on Bevy.
@@ -99,7 +100,7 @@ are marked `source: "placeholder"`, and the parity report lists them.
 `Rules` value. Remake features can only change behaviour through `Rules`.
 
 ### ADR-006: Bevy 0.18 for the game shell
-*Status: accepted.*
+*Status: superseded by ADR-014, 2026-09-29.*
 It is the newest Bevy that builds on the pinned toolchain (Rust 1.94). We'll
 revisit when the toolchain moves up.
 
@@ -176,7 +177,8 @@ the sim. Each room is split into gameplay data (`RoomGameplay`) and a
 swappable visual layer (`RoomVisual`: reference or modern scene).
 
 ### ADR-012: A conventional rendering path first
-*Status: accepted, 2026-09-29.*
+*Status: superseded by ADR-014, 2026-09-29 (the Bevy stack below is kept
+for the record; Unreal's is in `docs/UNREAL.md` §4).*
 
 **Core stack (Bevy 0.18):**
 - linear HDR, deferred PBR;
@@ -196,7 +198,8 @@ DLSS, HDR display output and GPU occlusion culling. The full table is in
 `docs/REMAKE.md` §3.
 
 ### ADR-013: Content formats
-*Status: accepted, 2026-09-29.*
+*Status: accepted, 2026-09-29; amended by ADR-014 (glTF stays the
+interchange; runtime assets become Unreal assets in the private project).*
 
 - **Scenes and models:** glTF 2.0 binary (`.glb`), with parameters in node
   `extras` under a fixed naming contract.
@@ -204,3 +207,32 @@ DLSS, HDR display output and GPU occlusion culling. The full table is in
   supercompression and full mips (BC7 colour, BC5 normals, BC6H HDR).
 - **Room manifests and looks:** RON, with a `schema` version field. The
   loader rejects a newer schema than it knows.
+
+### ADR-014: Unreal Engine 5.8 for the game
+*Status: accepted, 2026-09-29. Supersedes ADR-006 and ADR-012; amends
+ADR-001 and ADR-013.*
+
+The remake's visual bar (ADR-008) needs dynamic global illumination,
+reflections, volumetrics and many shadowed lights. Bevy 0.18 reached it only
+through bakes and workarounds: its deferred path mis-compiles with
+irradiance volumes, alpha-masked deferred meshes draw black over Solari, and
+Solari has no denoiser outside NVIDIA's. Unreal 5.8 ships Lumen, MegaLights,
+virtual shadow maps, volumetric fog and TSR, and a mature editor for the art.
+
+- **The game** lives in a new repository, `OpenDMC-UE`, beside this one:
+  a C++ Unreal 5.8 project, with Git LFS for Unreal assets.
+- **This workspace becomes the toolchain.** `dmc-formats` and `dmc` keep
+  reading the user's install. `dmc unreal` writes the bundle Unreal
+  imports (every room and model, and a manifest). The Blender kit stays.
+- **The sim is ported to C++** inside the Unreal project (a fixed 60 Hz
+  world subsystem, ADR-003). `dmc-sim` stays as the reference: its golden
+  traces (`cargo run -p dmc-sim --example golden`) are the port's
+  acceptance test, tick for tick, by state hash.
+- **`opendmc` (the Bevy shell) is frozen.** It still builds and runs as a
+  reference viewer. It gets no new features.
+- **The clean-room policy and game-data rule are unchanged.** Assets imported
+  from the user's install and rebuilt likeness art stay out of every
+  repository. In the Unreal project they live under ignored content folders
+  and are rebuilt by its import scripts.
+
+Details are in `docs/UNREAL.md`.

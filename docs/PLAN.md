@@ -15,6 +15,17 @@ clean-room rules, which override anything in this plan.
 **Out of scope:** interconnected games, portals, shared worlds and
 "Continuum". They are deferred, and nothing is designed for them.
 
+> **Engine change (2026-09-29, ADR-014).** The game moves to **Unreal Engine
+> 5.8**, in a new repository, `OpenDMC-UE`. This repository becomes the
+> toolchain:
+> - `dmc-formats` and `dmc` read the install;
+> - `dmc unreal` writes the bundle Unreal imports;
+> - `dmc-sim` is the reference the C++ port is checked against.
+>
+> The Bevy shell (`opendmc`) is frozen. Phase descriptions below that name
+> Bevy describe the frozen shell. The phases' goals carry over unchanged to
+> Unreal. The transfer plan is [`UNREAL.md`](UNREAL.md).
+
 ---
 
 ## 0. What "done" means
@@ -99,9 +110,14 @@ Design rules:
 Time estimates assume one developer working part-time with heavy LLM help.
 Treat them as rough.
 
-**Current priority (2026-09-29).** Door transitions (Phase 3) are done. Next
-is Milestone B0 of the benchmark track: the modern pipeline proven on `r100`'s
-original geometry ([`REMAKE.md`](REMAKE.md) §5).
+**Current priority (2026-09-29).** The move to Unreal
+([`UNREAL.md`](UNREAL.md) §8):
+1. import `r100` automatically;
+2. port the sim until every golden trace matches;
+3. cameras and doors in C++.
+
+Milestone B0 of the benchmark track ([`REMAKE.md`](REMAKE.md) §5) then
+resumes in Unreal. Its lighting items become Lumen work instead of bakes.
 
 After that, Phases 4–8 are pulled forward only as far as the benchmark room
 needs them. Nothing beyond `r100` is rebuilt until the benchmark is signed

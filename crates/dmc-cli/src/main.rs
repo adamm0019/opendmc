@@ -6,6 +6,7 @@ mod export;
 mod gltf;
 mod inventory;
 mod room;
+mod unreal;
 mod wildcard;
 
 use anyhow::{Context, Result};
@@ -89,6 +90,17 @@ enum Cmd {
         #[arg(long)]
         pattern: Option<String>,
     },
+    /// Export everything the Unreal project imports into one bundle: every
+    /// room (meshes, collision, props, cameras, triggers, lights) and model,
+    /// plus `manifest.json` (docs/UNREAL.md §3).
+    Unreal {
+        /// The game's `dmc1-0.nbz` (or a directory).
+        archive: PathBuf,
+        out: PathBuf,
+        /// Rooms only.
+        #[arg(long)]
+        no_models: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -127,6 +139,11 @@ fn main() -> Result<()> {
             out,
             pattern,
         } => room::run(&source, &out, pattern.as_deref()),
+        Cmd::Unreal {
+            archive,
+            out,
+            no_models,
+        } => unreal::run(&archive, &out, !no_models),
     }
 }
 

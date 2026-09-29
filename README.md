@@ -9,7 +9,11 @@ gameplay, and the visuals are rebuilt ([`docs/REMAKE.md`](docs/REMAKE.md)).
 > [`DECISIONS.md`](DECISIONS.md) for the clean-room rules every contribution
 > follows.
 
-Status: **Phase 0 (foundations)**. The full roadmap is in
+**The game is moving to Unreal Engine 5.8** (ADR-014, 2026-09-29), in the
+`OpenDMC-UE` repository. This repository is its toolchain: it reads your
+install, exports what Unreal imports (`dmc unreal`), and keeps the Rust sim
+as the reference for the C++ port. The Bevy shell is frozen. See
+[`docs/UNREAL.md`](docs/UNREAL.md); the full roadmap is in
 [`docs/PLAN.md`](docs/PLAN.md).
 
 ## What works today
@@ -17,9 +21,9 @@ Status: **Phase 0 (foundations)**. The full roadmap is in
 | Piece | State |
 |---|---|
 | `dmc-formats` | Readers for Pipeworks bundles, `T32`/`TM2` texture containers (DXT1/DXT5/ARGB), model section lists, geometry + skinning + skeletons, motion banks with Hermite curves, leg IK. Both byte orders, fully bounds-checked. Tested with synthetic fixtures only. |
-| `dmc` CLI | `inventory`, `bundle-list`, `bundle-extract`, `info`, `tex` (→ PNG), `model` (→ textured, skinned `.glb`), `export` (batch with validation stats). |
-| `dmc-sim` | Deterministic 60 Hz combat core: input buffer, combo links, cancel windows, command moves under lock-on, hitboxes vs hurt capsules, hit-stop, launches and juggle gravity, style meter, Devil Trigger, a melee enemy brain, input tapes, state hashing. All values are placeholders until measured. |
-| `opendmc` | Bevy 0.18 graybox: fixed cameras with held-direction-across-cuts controls, interpolated rendering, HUD, hitbox view, tape recording, and `--model` to view a model file from your install. |
+| `dmc` CLI | `inventory`, `bundle-list`, `bundle-extract`, `info`, `tex` (→ PNG), `model` (→ textured, skinned `.glb`), `export` (batch with validation stats), `room` (rooms → `.glb` plus cameras, triggers and lights as JSON), `unreal` (the bundle the Unreal project imports). |
+| `dmc-sim` | Deterministic 60 Hz combat core: input buffer, combo links, cancel windows, command moves under lock-on, hitboxes vs hurt capsules, hit-stop, launches and juggle gravity, style meter, Devil Trigger, a melee enemy brain, input tapes, state hashing. All values are placeholders until measured. `--example golden` writes the traces the C++ port must match. |
+| `opendmc` | *Frozen (ADR-014).* Bevy 0.18 graybox and room viewer: fixed cameras with held-direction-across-cuts controls, interpolated rendering, HUD, hitbox view, tape recording, and `--model` to view a model file from your install. |
 
 ## Quick start
 
@@ -63,7 +67,7 @@ already excludes them.
 crates/dmc-formats   parsers (no engine dependency)
 crates/dmc-sim       deterministic gameplay core (no engine dependency)
 crates/dmc-cli       the `dmc` tool
-crates/opendmc       Bevy game shell
+crates/opendmc       Bevy game shell (frozen)
 data/                authored gameplay data: moves, cameras (with provenance)
 docs/                plan, format notes, coverage matrix, inventory reports
 ```

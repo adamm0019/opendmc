@@ -328,6 +328,11 @@ exists.
 
 ## 3. Rendering pipeline (conventional path)
 
+> **Superseded for the engine (2026-09-29, ADR-014).** This section describes
+> the Bevy stack. In Unreal 5.8 the same targets are met by Lumen, MegaLights,
+> virtual shadow maps, volumetric fog and TSR (`UNREAL.md` §4). The targets
+> themselves (§1) are unchanged.
+
 Everything below is built into Bevy 0.18 unless marked *custom*.
 
 | Stage | Choice |
