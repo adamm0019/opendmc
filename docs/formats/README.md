@@ -569,19 +569,26 @@ instead. Vector 0 is then a centre and vector 1 a size such as
 `(500, 500, 0)`, so probably a cylinder; `Volume::Round` takes it as one,
 unconfirmed.
 
-**Doors.** Doors are records with kind 2 or 3, sub 0 and a room id: 220 of
-them. Checked against the other rooms:
-- 216 name a room in the archive. The other four name `r00f`, `r105` and
+**Doors.** Doors are the records with sub-kind 0 and a room id: 249 of them,
+across kinds 1 (1), 2 (3), 3 (217) and 7 (28). An earlier reading took only
+kinds 2 and 3, which missed `r106`'s exits (kind 7) and one in `r110`
+(kind 1). Checked against the other rooms (`dmc-cli/tests/game_data.rs`):
+- 245 name a room in the archive. The other four name `r00f`, `r105` and
   `r20a` (twice), which it lacks.
-- 180 of those 216 arrival points lie within 150 units of a floor in the
+- 203 of those 245 arrival points lie within 150 units of a floor in the
   target room's collision (§4d).
-- 166 target rooms have a door leading back. For 108 of them, the arrival
+- 205 target rooms have a door leading back. For 134 of them, the arrival
   point is within 800 units of that return door's volume, so you arrive
   beside the door you'd use to go back.
 
-`r100` alone has doors to `r101`, `r11b`, `r110`, `r116` and `r106`. The
-other kinds (sub-kinds 1–14 of kind 3, kind 7, …) are not identified yet;
-their heads carry small integers or points instead.
+`r100` alone has doors to `r101`, `r11b`, `r110`, `r116` and `r106`. Records
+with other sub-kinds (1–14) sometimes carry a value in the room-id slot too,
+but those values rarely name a room in the archive, so they probably mean
+something else. The other trigger kinds and sub-kinds are not identified yet;
+their heads carry small integers or points instead. Whether the original
+opens a door on contact or on a button press, and which way the player faces
+on arrival (perhaps the `extra` byte), is still to be checked against
+captures.
 
 ## 5. Skeleton: `PS3-community`, layout `PC-verified`
 
