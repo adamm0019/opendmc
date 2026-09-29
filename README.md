@@ -1,8 +1,9 @@
 # OpenDMC
 
 A clean-room Rust engine for **Devil May Cry (2001)** that runs from the files
-of your own copy of the *Devil May Cry HD Collection*, with an opt-in remaster
-layer.
+of your own copy of the *Devil May Cry HD Collection*, as a faithful modern
+graphical remake. The original's data decides layout, collision, cameras and
+gameplay, and the visuals are rebuilt ([`docs/REMAKE.md`](docs/REMAKE.md)).
 
 > **No game data is included or distributed.** You need to own the game. See
 > [`DECISIONS.md`](DECISIONS.md) for the clean-room rules every contribution

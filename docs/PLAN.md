@@ -1,12 +1,19 @@
 # OpenDMC — End-to-End Plan
 
 A clean-room Rust engine that runs **Devil May Cry (2001)** from the files of a
-legally owned copy of the *Devil May Cry HD Collection* (Steam, app 631510), plus
-an opt-in remaster layer on top.
+legally owned copy of the *Devil May Cry HD Collection* (Steam, app 631510), as a
+**faithful modern graphical remake**. The original's data decides layout, scale,
+collision, cameras and gameplay. Everything you see is rebuilt to modern
+standards. [`REMAKE.md`](REMAKE.md) is the non-negotiable product requirement
+behind that, with the rendering and asset pipelines and the benchmark room.
 
-The repository ships **engine code only**. Anyone running it must point it at
-their own install. See [`DECISIONS.md`](../DECISIONS.md) for the clean-room
-rules, which override anything in this plan.
+The repository ships **engine code and tools only**. Anyone running it must
+point it at their own install. Rebuilt art lives in a private content store
+outside the repository (ADR-009). See [`DECISIONS.md`](../DECISIONS.md) for the
+clean-room rules, which override anything in this plan.
+
+**Out of scope:** interconnected games, portals, shared worlds and
+"Continuum". They are deferred, and nothing is designed for them.
 
 ---
 
@@ -14,21 +21,28 @@ rules, which override anything in this plan.
 
 | Tier | Name | Definition of done |
 |---|---|---|
-| T1 | **Viewer** | Every room, character, enemy, weapon and prop loads, renders textured, and plays its animations. |
-| T2 | **Playable slice** | Mission 1 → Mission 3 playable: movement, fixed cameras, Rebellion + Ebony & Ivory, Marionettes, doors, orbs, HUD. |
-| T3 | **Port** | All 23 missions, every weapon/enemy/boss, shop, saves, Secret Missions, difficulty modes, Dante Must Die. |
-| T4 | **Remaster** | A toggleable "Enhanced" profile: modern lighting, shadows, high refresh, widescreen-aware cameras, rebinding, accessibility. |
-| T5 | **Remake** | Our own content and design changes: new modes, camera options, a Bloody Palace, a mod API. Always kept separate from the Original profile. |
+| T1 | **Reference viewer** | Every room, character, enemy, weapon and prop loads from the user's files, renders textured in the reference look, and plays its animations. |
+| T2 | **Benchmark room** | `r100`, the castle entrance hall, rebuilt to the visual standard and playable: modern Dante with Alastor and Ebony & Ivory, a Marionette, orbs, a door, a destructible, the original cameras, GI, reflections, volumetrics, grading, measured performance ([`REMAKE.md`](REMAKE.md) §5). |
+| T3 | **Playable slice** | Mission 1 → Mission 3 playable at the benchmark standard: movement, fixed cameras, Rebellion, Alastor, Ebony & Ivory, Marionettes, doors, orbs, HUD. |
+| T4 | **Full remake** | All 23 missions, every weapon, enemy and boss, the shop, saves, Secret Missions, difficulty modes and Dante Must Die, at the benchmark standard. |
+| T5 | **Extras** | Our own additions: new modes, camera options, a Bloody Palace, a mod API. Kept separate from the `Original` profile, and blocked until T3 passes. |
 
 The engine always runs gameplay in **one of two fidelity profiles**:
 
 - `Original`: aims to match the original's frame timing as closely as we can
   measure it. This is the reference behaviour, and parity tests run against it.
-- `Enhanced`: the remaster and remake changes. It can differ from `Original`
-  anywhere, but only through settings the player can see.
+- `Enhanced`: gameplay changes beyond the original, such as assists and
+  extras. It can differ from `Original` anywhere, but only through settings the
+  player can see.
 
 Gameplay code reads the profile from one `Rules` resource. There are no
 scattered `if enhanced` checks.
+
+How the game *looks* is a separate choice from the profile:
+- `--look modern` is the product: rebuilt visuals from the content store.
+- `--look reference` draws the original's own meshes and baked vertex
+  lighting from the user's files, for side-by-side checks and for rooms not
+  rebuilt yet.
 
 ---
 
@@ -71,6 +85,12 @@ Design rules:
 5. **Rendering is interpolated, simulation is fixed.** The sim ticks at 60 Hz.
    The renderer interpolates between the last two states, so 144 Hz is
    presentation only.
+6. **Gameplay never reads visual assets.** Collision, cameras, triggers,
+   hurtboxes, hitboxes and reach come from the original's data and from
+   `data/*.ron`. A rebuilt model or room changes how things look, never how
+   they play (ADR-011).
+7. **One world unit is one metre**, which is 450 of the original's room units
+   (ADR-010). The sim, the renderer and Blender all use it.
 
 ---
 
@@ -78,6 +98,15 @@ Design rules:
 
 Time estimates assume one developer working part-time with heavy LLM help.
 Treat them as rough.
+
+**Current priority (2026-09-29).**
+1. Finish door transitions (Phase 3).
+2. Milestone B0 of the benchmark track: the modern pipeline proven on `r100`'s
+   original geometry ([`REMAKE.md`](REMAKE.md) §5).
+
+After that, Phases 4–8 are pulled forward only as far as the benchmark room
+needs them. Nothing beyond `r100` is rebuilt until the benchmark is signed
+off.
 
 ### Phase 0: Foundations *(this commit)*
 - Cargo workspace, CI-ready tests, clean-room policy, format notes.
@@ -247,22 +276,39 @@ checked against captures, with parity tests in CI.
 
 **Exit:** a full playthrough in the `Original` profile.
 
-### Phase 9: Remaster layer *(ongoing)*
-| Feature | Approach |
-|---|---|
-| Lighting | Clustered forward lighting with authored light probes per room. Original vertex-lit look kept as an option. |
-| Shadows | Cascaded / spot shadows for Dante & enemies (original blob shadows kept as option). |
-| Materials | Generate normal/roughness maps offline **on the user's machine** from their textures. Never distributed. |
-| Resolution & FPS | Render at native res and uncapped FPS; sim interpolation keeps 60 Hz feel. |
-| Widescreen cameras | Per-camera FOV/position adjustments in `data/cameras/*.enhanced.ron`. |
-| Input | Full rebinding, modern DMC control layout option, input display, training mode. |
-| Accessibility | Game speed, auto-lock, colour-blind-safe UI, subtitle styling. |
-| Upscaling | Optional local ML upscaler hook (user-supplied), with results cached in the user's config dir. |
+### Phase 9: Modern visuals *(benchmark first, then every room)*
+The visual half of the product. The requirement, the rendering pipeline, the
+Blender-to-runtime pipeline and the benchmark milestones are in
+[`REMAKE.md`](REMAKE.md). In short:
 
-### Phase 10: Remake (T5)
-Everything that isn't "the original, better". It lives behind the `Enhanced`
-profile or in separate mode crates: Bloody Palace, practice mode, a mod API
-(Lua or WASM scripting over the `dmc-sim` event stream), and new cameras.
+| Milestone | Content |
+|---|---|
+| **B0** (next) | The modern pipeline on `r100`'s original geometry: runtime room loading, one metre unit, the HDR deferred camera stack with per-room looks, the content store and manifest, the Blender reference kit, a Cycles lightmap bake with probes and a fog volume, `--bench` captures and frame times, and the composition check |
+| B1 | `r100`'s architecture and materials rebuilt against the locked reference |
+| B2 | Modern Dante, Alastor, Ebony & Ivory, a Marionette, red and green orbs |
+| B3 | `r100` playable: combat, orbs, the door, a destructible, particles |
+| B4 | Performance and visual sign-off. The room becomes the standard |
+| Rooms | Every other room rebuilt to the standard, mission by mission (T3, then T4) |
+
+Player options that still stand from the old remaster plan:
+- **Input:** full rebinding, a modern DMC control layout, an input display,
+  training mode.
+- **Accessibility:** game speed, auto-lock, colour-blind-safe UI, subtitle
+  styling.
+- **Framing:** widescreen-aware cameras that keep each original composition
+  (`data/cameras/*.ron`).
+
+Dropped as goals: normal maps generated from the original textures and ML
+upscaling of them. That is the "upscaled PS2" look the requirement rules out.
+At most it is a stopgap for rooms not rebuilt yet.
+
+### Phase 10: Extras (T5)
+Everything that isn't the original remade. It lives behind the `Enhanced`
+profile or in separate mode crates:
+- Bloody Palace;
+- practice mode;
+- a mod API (Lua or WASM scripting over the `dmc-sim` event stream);
+- new cameras.
 
 ---
 
@@ -290,6 +336,7 @@ but that is not confirmed. The inventory tool is built for exactly this doubt:
 | Sim | Unit tests per rule; property tests (determinism: same tape gives the same hash); golden traces. |
 | Parity | **Video capture:** record the original at 60 fps with an input overlay, annotate frame numbers, and store measurements in the RON `source:` fields. **Memory oracle (optional, Windows):** a separate tool reads player position and state from the running original each frame to produce reference traces. The zlib-licensed DDMK mod documents where those live in memory. The engine never links or embeds it. |
 | Visual | Screenshot diff for authored cameras (per-room SSIM against captures taken locally, never committed). |
+| Composition | `dmc content check` renders every original camera to depth, both in the reference layer and in the rebuilt one, and reports where the modern silhouettes stray. `--bench` writes reference/modern screenshot pairs and frame times per camera (kept local). |
 
 ---
 
@@ -300,6 +347,7 @@ opendmc/
 ├── DECISIONS.md            clean-room policy & architectural decisions (ADR log)
 ├── docs/
 │   ├── PLAN.md             this file
+│   ├── REMAKE.md           the visual requirement, render and asset pipelines
 │   ├── formats/            our own format notes + COVERAGE.md
 │   └── inventory/          inventory reports (no game data)
 ├── crates/
@@ -307,7 +355,18 @@ opendmc/
 │   ├── dmc-sim/            deterministic gameplay core (no Bevy)
 │   ├── dmc-cli/            `dmc` tool: inventory, extract, export
 │   └── opendmc/            Bevy game shell
-└── data/                   authored gameplay data (moves, enemies, cameras)
+├── tools/blender/          headless Blender scripts: reference scene, bake, export
+└── data/                   authored gameplay data (moves, enemies, cameras, room overrides)
+
+outside the repository, private (ADR-009):
+<content store>/
+├── materials.blend         the shared material families
+└── rooms/r100/
+    ├── reference/          `dmc room` exports from the user's files
+    ├── r100.blend          locked reference + modern collections
+    ├── visual.glb, *.ktx2  exported visuals, lightmaps, probes
+    ├── room.ron            manifest (schema-versioned)
+    └── look.ron            exposure, grading, fog, bloom limits
 ```
 
 ---
@@ -319,6 +378,10 @@ opendmc/
 | PC formats differ from PS3 notes | Medium | Inventory first; parsers are endian-generic and validated structurally. |
 | Collision/camera data not found | Medium | Fallbacks designed up front (derived collision, `camfit`). |
 | Combat feel doesn't match | High | Measure-then-author discipline, parity harness, fidelity profiles. |
-| Scope creep (remake ideas early) | High | T5 work is blocked until T2 exit criteria pass. |
+| Scope creep | High | T5 is blocked until T3 passes, and nothing beyond `r100` is rebuilt until the benchmark is signed off. |
+| Hero-quality art needs artists | High | Claude automates the pipeline, blockouts, materials, lighting and validation. Sculpted characters and weapons need an artist, or AI-assisted generation with human review. B2 exposes the cost early. |
+| Rebuilt art and IP | Medium | Rebuilt characters and rooms stay in the private content store, never in this repository or a release (ADR-009). |
+| Renderer maturity (SSR, volumetrics, decals in Bevy) | Medium | Conventional path only; every camera measured by `--bench`; custom passes where a built-in falls short; experimental features optional. |
+| Prop placement not found | Medium | Modern props are placed in Blender against the reference and captures while the search continues. |
 | Legal | Low–Med | DECISIONS.md rules; no assets or exe-derived code in repo; users supply their own copy. |
 | Motivation (multi-month project) | High | Each phase ends in something you can see or play. |

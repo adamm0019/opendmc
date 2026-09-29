@@ -11,6 +11,9 @@ log. The policy section is binding: any contribution that breaks it is reverted.
 A new engine, written from scratch in Rust, that reads the data files of a
 legally owned copy of *Devil May Cry* (as shipped in the *Devil May Cry HD
 Collection*) to recreate the game, the same way OpenMW, OpenRCT2 and IW4L work.
+It is a modern graphical remake:
+- the original's data decides layout, collision, cameras and gameplay;
+- the visuals are rebuilt ([`docs/REMAKE.md`](docs/REMAKE.md), ADR-008).
 
 ### Hard rules
 1. **No game data in the repository.** That covers models, textures, audio,
@@ -32,8 +35,14 @@ Collection*) to recreate the game, the same way OpenMW, OpenRCT2 and IW4L work.
 5. **The end user supplies their own copy.** The engine asks for the install
    path and never downloads or bundles game content.
 6. **Remaster derivatives stay local.** Anything generated from the user's
-   files (upscaled textures, material maps, converted glTF) is written to the
-   user's cache or config directory and never committed or distributed.
+   files (upscaled textures, material maps, converted glTF, Blender reference
+   layers) is written to the user's cache, config directory or private content
+   store, and never committed or distributed.
+7. **Rebuilt art stays out of this repository.** Modern models, textures,
+   scenes and baked lighting that recreate the game's characters, weapons and
+   places live in a private content store (ADR-009). This repository holds
+   only the code, tools and scripts that make and load them, and our own
+   original placeholders.
 
 ### Allowed sources
 
@@ -95,7 +104,103 @@ It is the newest Bevy that builds on the pinned toolchain (Rust 1.94). We'll
 revisit when the toolchain moves up.
 
 ### ADR-007: Placeholder art is original
-*Status: accepted.*
+*Status: accepted; narrowed by ADR-009 (rebuilt likeness art is allowed in the
+private content store).*
 Without a game install, the shell renders a graybox room and a capsule
 "test dummy", both our own primitives. No character likeness is recreated in
 code or art.
+
+### ADR-008: The product is a modern graphical remake
+*Status: accepted, 2026-09-29. Supersedes the "opt-in remaster layer" (old T4,
+Phase 9).*
+
+What the original's data decides, the remake keeps:
+- room layouts and dimensions;
+- collision;
+- doors, triggers and enemy placement;
+- fixed-camera compositions;
+- animation timing and hitboxes.
+
+Everything visible is rebuilt to modern standards, under the art direction,
+rendering target and benchmark set out in `docs/REMAKE.md`. That file is a
+non-negotiable requirement. The original's own meshes and lighting remain as
+`--look reference`, for comparison and for rooms not rebuilt yet.
+Interconnected-game, portal, shared-world and "Continuum" work is out of
+scope.
+
+### ADR-009: Rebuilt art lives in a private content store
+*Status: accepted, 2026-09-29.*
+
+A modern Dante, Marionette or entrance hall recreates Capcom's characters and
+places. It can't be the "original placeholder art" of ADR-007, and it can't
+be distributed.
+
+- Such content lives in a content store outside this repository: by default
+  a sibling folder, or a separate private repository with Git LFS. The engine
+  reads it through `--content <dir>` (or `OPENDMC_CONTENT`).
+- The Blender reference layers built from the user's files live there too
+  (policy rule 6).
+- This repository holds the code, scripts and schemas, and our own
+  placeholders.
+- Nothing in the store is published or bundled with a release.
+- Generated references (Higgsfield or similar) go in the store as concept
+  material, never as authoritative geometry.
+
+### ADR-010: One world unit is one metre (450 room units)
+*Status: accepted, 2026-09-29.*
+
+Room units ÷ 450 was already the sim's scale: Dante, about 900 room units,
+stands 2 units tall. It is now declared to be metres, for three reasons:
+- physically based light units, fog densities, probe spacing and Blender
+  scenes all need a real unit;
+- changing the unit once content exists would mean rescaling every asset and
+  every authored value;
+- only relative scale matters to gameplay, and it is unchanged.
+
+The constant is defined once and shared by the sim, the renderer, the exports
+and the Blender scripts.
+
+### ADR-011: Gameplay never reads visual assets
+*Status: accepted, 2026-09-29.*
+
+These come only from the original's data and from `data/*.ron` (with
+provenance):
+- collision;
+- camera zones and rails;
+- triggers and doors;
+- hurtboxes, hitboxes and reach.
+
+Visual models attach to gameplay through named sockets. Secondary animation,
+cloth, hair, visual damage and a model's level of detail never feed back into
+the sim. Each room is split into gameplay data (`RoomGameplay`) and a
+swappable visual layer (`RoomVisual`: reference or modern scene).
+
+### ADR-012: A conventional rendering path first
+*Status: accepted, 2026-09-29.*
+
+**Core stack (Bevy 0.18):**
+- linear HDR, deferred PBR;
+- cascaded and spot shadows;
+- SSAO, SSR, TAA;
+- bloom, clamped auto-exposure, per-room colour grading.
+
+**Lighting and atmosphere:**
+- Cycles-baked lightmaps for architecture;
+- irradiance volumes for actors;
+- baked reflection probes;
+- fog volumes with volumetric light;
+- clustered decals.
+
+**Optional only, never required:** hardware ray tracing (Solari), meshlets,
+DLSS, HDR display output and GPU occlusion culling. The full table is in
+`docs/REMAKE.md` §3.
+
+### ADR-013: Content formats
+*Status: accepted, 2026-09-29.*
+
+- **Scenes and models:** glTF 2.0 binary (`.glb`), with parameters in node
+  `extras` under a fixed naming contract.
+- **Textures, lightmaps and probes:** KTX2 in GPU formats with zstd
+  supercompression and full mips (BC7 colour, BC5 normals, BC6H HDR).
+- **Room manifests and looks:** RON, with a `schema` version field. The
+  loader rejects a newer schema than it knows.
